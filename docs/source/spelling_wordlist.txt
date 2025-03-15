@@ -1,0 +1,12 @@
+cpython
+cpython's
+issubclass
+iterable
+metaclass
+mytuple
+namedtuple
+structseq
+subclassing
+sys
+unsubclassable
+xuehai
