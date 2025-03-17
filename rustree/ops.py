@@ -14,9 +14,15 @@
 # ==============================================================================
 """RusTree: Optimized PyTree Utilities written in Rust."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, TypeVar
 
 import rustree._rs as _rs
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 __all__ = [
@@ -24,10 +30,15 @@ __all__ = [
 ]
 
 
+_T = TypeVar('_T')
+
+
 def tree_is_leaf(
-    tree: Any,
+    tree: _T,
     /,
+    is_leaf: Callable[[_T], bool] | None = None,
     *,
+    none_is_leaf: bool = False,
     namespace: str = '',
 ) -> bool:
     """Test whether the given object is a leaf node.
@@ -58,4 +69,4 @@ def tree_is_leaf(
     Returns:
         A boolean indicating if the given object is a leaf node.
     """
-    return _rs.is_leaf(tree, namespace)
+    return _rs.is_leaf(tree, is_leaf, none_is_leaf, namespace)

@@ -16,10 +16,11 @@
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
 use pyo3::types::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[pyclass(eq, eq_int, module = "rustree")]
 #[derive(PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum PyTreeKind {
     CUSTOM = 0,
     LEAF,
@@ -41,10 +42,6 @@ impl<T> std::cmp::PartialEq for IdHashedPy<T> {
     fn eq(&self, other: &Self) -> bool {
         self.0.as_ptr() == other.0.as_ptr()
     }
-
-    fn ne(&self, other: &Self) -> bool {
-        !self.eq(other)
-    }
 }
 impl<T> std::cmp::Eq for IdHashedPy<T> {}
 
@@ -54,8 +51,8 @@ impl<T> std::hash::Hash for IdHashedPy<T> {
     }
 }
 
-static REGISTRY: GILOnceCell<PyTreeTypeRegistry> = GILOnceCell::new();
-static BUILTIN_TYPES: GILOnceCell<HashSet<IdHashedPy<PyAny>>> = GILOnceCell::new();
+static REGISTRY_NONE_IS_NODE: GILOnceCell<PyTreeTypeRegistry> = GILOnceCell::new();
+static REGISTRY_NONE_IS_LEAF: GILOnceCell<PyTreeTypeRegistry> = GILOnceCell::new();
 
 pub struct PyTreeTypeRegistration {
     kind: PyTreeKind,
@@ -71,45 +68,64 @@ pub struct PyTreeTypeRegistry {
 }
 
 impl PyTreeTypeRegistry {
-    fn new(py: Python<'_>) -> &'static Self {
-        REGISTRY.get_or_init(py, || {
-            let mut singleton = PyTreeTypeRegistry {
-                registrations: HashMap::new(),
-                named_registrations: HashMap::new(),
-            };
-            let collections = py.import("collections").unwrap();
-            let ordereddict = collections.getattr("OrderedDict").unwrap();
-            let defaultdict = collections.getattr("defaultdict").unwrap();
-            let deque = collections.getattr("deque").unwrap();
+    fn new(py: Python<'_>, none_is_leaf: bool) -> &'static Self {
+        let init_fn = |none_is_leaf: bool| {
+            move || {
+                let mut singleton = PyTreeTypeRegistry {
+                    registrations: HashMap::new(),
+                    named_registrations: HashMap::new(),
+                };
+                let collections = py.import("collections").unwrap();
+                let ordereddict = collections.getattr("OrderedDict").unwrap();
+                let defaultdict = collections.getattr("defaultdict").unwrap();
+                let deque = collections.getattr("deque").unwrap();
 
-            for (type_, kind) in [
-                (py.get_type::<PyNone>().into_any(), PyTreeKind::NONE),
-                (py.get_type::<PyTuple>().into_any(), PyTreeKind::TUPLE),
-                (py.get_type::<PyList>().into_any(), PyTreeKind::LIST),
-                (py.get_type::<PyDict>().into_any(), PyTreeKind::DICT),
-                (ordereddict, PyTreeKind::ORDEREDDICT),
-                (defaultdict, PyTreeKind::DEFAULTDICT),
-                (deque, PyTreeKind::DEQUE),
-            ] {
-                let type_ = type_.unbind();
+                let mut register = |type_: Py<PyAny>, kind: PyTreeKind| {
+                    singleton
+                        .registrations
+                        .entry(IdHashedPy(type_.clone_ref(py)))
+                        .or_insert(PyTreeTypeRegistration {
+                            kind,
+                            type_,
+                            flatten_func: None,
+                            unflatten_func: None,
+                            path_entry_type: None,
+                        });
+                };
+
+                if none_is_leaf {
+                    register(
+                        py.get_type::<PyNone>().into_any().unbind(),
+                        PyTreeKind::LEAF,
+                    );
+                }
+                register(
+                    py.get_type::<PyTuple>().into_any().unbind(),
+                    PyTreeKind::TUPLE,
+                );
+                register(
+                    py.get_type::<PyList>().into_any().unbind(),
+                    PyTreeKind::LIST,
+                );
+                register(
+                    py.get_type::<PyDict>().into_any().unbind(),
+                    PyTreeKind::DICT,
+                );
+                register(ordereddict.into_any().unbind(), PyTreeKind::ORDEREDDICT);
+                register(defaultdict.into_any().unbind(), PyTreeKind::DEFAULTDICT);
+                register(deque.into_any().unbind(), PyTreeKind::DEQUE);
                 singleton
-                    .registrations
-                    .entry(IdHashedPy(type_.clone_ref(py)))
-                    .or_insert(PyTreeTypeRegistration {
-                        kind,
-                        type_,
-                        flatten_func: None,
-                        unflatten_func: None,
-                        path_entry_type: None,
-                    });
             }
+        };
 
-            singleton
-        })
+        match none_is_leaf {
+            false => REGISTRY_NONE_IS_NODE.get_or_init(py, init_fn(false)),
+            true => REGISTRY_NONE_IS_LEAF.get_or_init(py, init_fn(true)),
+        }
     }
 
-    pub fn get_singleton(py: Python<'_>) -> &'static Self {
-        Self::new(py)
+    pub fn get_singleton(py: Python<'_>, none_is_leaf: bool) -> &'static Self {
+        Self::new(py, none_is_leaf)
     }
 }
 
@@ -122,20 +138,21 @@ impl Drop for PyTreeTypeRegistry {
     }
 }
 
-pub fn registry_lookup<'py, 's>(
-    cls: &Bound<'py, PyAny>,
+pub fn registry_lookup<'s>(
+    cls: &Bound<'_, PyAny>,
+    none_is_leaf: Option<bool>,
     namespace: Option<&str>,
 ) -> Option<&'s PyTreeTypeRegistration> {
-    let registry = PyTreeTypeRegistry::get_singleton(cls.py());
-
+    let none_is_leaf = none_is_leaf.unwrap_or(false);
     let namespace = namespace.unwrap_or("");
+
+    let registry = PyTreeTypeRegistry::get_singleton(cls.py(), none_is_leaf);
     if !namespace.is_empty() {
-        match registry
+        if let Some(registration) = registry
             .named_registrations
             .get(&(String::from(namespace), IdHashedPy(cls.clone().unbind())))
         {
-            Some(registration) => return Some(registration),
-            _ => (),
+            return Some(registration);
         }
     }
     registry

@@ -16,6 +16,7 @@
 # pylint: disable=all
 
 import enum
+from collections.abc import Callable
 from typing import TypeVar
 
 _T = TypeVar('_T')
@@ -23,7 +24,13 @@ _T = TypeVar('_T')
 # Set if the type allows subclassing (see CPython's Include/object.h)
 Py_TPFLAGS_BASETYPE: int  # (1UL << 10)
 
-def is_leaf(obj: _T, /, namespace: str = '') -> bool: ...
+def is_leaf(
+    obj: _T,
+    /,
+    leaf_predicate: Callable[[_T], bool] | None = None,
+    none_is_leaf: bool = False,
+    namespace: str = '',
+) -> bool: ...
 def is_namedtuple(obj: object | type, /) -> bool: ...
 def is_namedtuple_instance(obj: object, /) -> bool: ...
 def is_namedtuple_class(cls: type, /) -> bool: ...
