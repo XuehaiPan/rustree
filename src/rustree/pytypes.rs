@@ -65,18 +65,21 @@ fn is_namedtuple_class_impl(cls: &Bound<PyType>) -> bool {
 }
 
 #[pyfunction]
+#[pyo3(signature = (cls, /))]
 #[inline]
 pub fn is_namedtuple_class(cls: &Bound<PyAny>) -> PyResult<bool> {
     Ok(cls.is_instance_of::<PyType>() && is_namedtuple_class_impl(cls.downcast::<PyType>()?))
 }
 
 #[pyfunction]
+#[pyo3(signature = (obj, /))]
 #[inline]
 pub fn is_namedtuple_instance(obj: &Bound<PyAny>) -> PyResult<bool> {
     Ok(!obj.is_instance_of::<PyType>() && is_namedtuple_class_impl(&obj.get_type()))
 }
 
 #[pyfunction]
+#[pyo3(signature = (obj, /))]
 #[inline]
 pub fn namedtuple_fields<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
     let (cls, err_msg) = if obj.is_instance_of::<PyType>() {
@@ -98,6 +101,7 @@ pub fn namedtuple_fields<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, Py
 }
 
 #[pyfunction]
+#[pyo3(signature = (obj, /))]
 #[inline]
 pub fn is_namedtuple(obj: &Bound<PyAny>) -> PyResult<bool> {
     let cls = if obj.is_instance_of::<PyType>() {
@@ -139,18 +143,21 @@ fn is_structseq_class_impl(cls: &Bound<PyType>) -> bool {
 }
 
 #[pyfunction]
+#[pyo3(signature = (cls, /))]
 #[inline]
 pub fn is_structseq_class(cls: &Bound<PyAny>) -> PyResult<bool> {
     Ok(cls.is_instance_of::<PyType>() && is_structseq_class_impl(cls.downcast::<PyType>()?))
 }
 
 #[pyfunction]
+#[pyo3(signature = (obj, /))]
 #[inline]
 pub fn is_structseq_instance(obj: &Bound<PyAny>) -> PyResult<bool> {
     Ok(!obj.is_instance_of::<PyType>() && is_structseq_class_impl(&obj.get_type()))
 }
 
 #[pyfunction]
+#[pyo3(signature = (obj, /))]
 #[inline]
 pub fn is_structseq(obj: &Bound<PyAny>) -> PyResult<bool> {
     let cls = if obj.is_instance_of::<PyType>() {
@@ -209,6 +216,7 @@ fn structseq_fields_impl<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, P
 }
 
 #[pyfunction]
+#[pyo3(signature = (obj, /))]
 #[inline]
 pub fn structseq_fields<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
     let (cls, err_msg) = if obj.is_instance_of::<PyType>() {

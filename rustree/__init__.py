@@ -15,6 +15,7 @@
 """RusTree: Optimized PyTree Utilities written in Rust."""
 
 from rustree import typing
+from rustree.ops import tree_is_leaf
 from rustree.typing import (
     PyTreeKind,
     is_namedtuple,
@@ -29,6 +30,7 @@ from rustree.typing import (
 
 
 __all__ = [
+    'tree_is_leaf',
     'PyTreeKind',
     'is_namedtuple',
     'is_namedtuple_class',

@@ -16,10 +16,14 @@
 # pylint: disable=all
 
 import enum
+from typing import TypeVar
+
+_T = TypeVar('_T')
 
 # Set if the type allows subclassing (see CPython's Include/object.h)
 Py_TPFLAGS_BASETYPE: int  # (1UL << 10)
 
+def is_leaf(obj: _T, /, namespace: str = '') -> bool: ...
 def is_namedtuple(obj: object | type, /) -> bool: ...
 def is_namedtuple_instance(obj: object, /) -> bool: ...
 def is_namedtuple_class(cls: type, /) -> bool: ...

@@ -13,12 +13,19 @@
 // limitations under the License.
 // =============================================================================
 
-mod pytypes;
-mod registry;
-pub mod treespec;
+use pyo3::prelude::*;
 
-pub use pytypes::{
-    is_namedtuple, is_namedtuple_class, is_namedtuple_instance, is_structseq, is_structseq_class,
-    is_structseq_instance, namedtuple_fields, structseq_fields,
-};
-pub use registry::PyTreeKind;
+use crate::rustree::pytypes::{is_namedtuple_class, is_structseq_class};
+use crate::rustree::registry::registry_lookup;
+
+#[pyfunction]
+#[pyo3(signature = (obj, /, namespace=""))]
+#[inline]
+pub fn is_leaf(obj: &Bound<PyAny>, namespace: Option<&str>) -> PyResult<bool> {
+    let cls = obj.get_type();
+    match registry_lookup(&cls, namespace) {
+        Some(_) => return Ok(false),
+        _ => (),
+    };
+    Ok(!(is_namedtuple_class(&cls)? || is_structseq_class(&cls)?))
+}

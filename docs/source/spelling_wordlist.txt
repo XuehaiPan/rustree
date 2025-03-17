@@ -1,3 +1,7 @@
+args
+arity
+bool
+const
 cpython
 cpython's
 issubclass
@@ -5,8 +9,13 @@ iterable
 metaclass
 mytuple
 namedtuple
+namespace
+pytree
+str
 structseq
 subclassing
+subtree
 sys
+treespec
 unsubclassable
 xuehai

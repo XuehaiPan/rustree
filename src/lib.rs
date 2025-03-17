@@ -31,5 +31,6 @@ fn build_extension(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rustree::is_structseq_instance, m)?)?;
     m.add_function(wrap_pyfunction!(rustree::is_structseq_class, m)?)?;
     m.add_function(wrap_pyfunction!(rustree::structseq_fields, m)?)?;
+    m.add_function(wrap_pyfunction!(rustree::treespec::is_leaf, m)?)?;
     Ok(())
 }

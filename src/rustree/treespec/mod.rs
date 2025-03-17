@@ -13,12 +13,6 @@
 // limitations under the License.
 // =============================================================================
 
-mod pytypes;
-mod registry;
-pub mod treespec;
+mod flatten;
 
-pub use pytypes::{
-    is_namedtuple, is_namedtuple_class, is_namedtuple_instance, is_structseq, is_structseq_class,
-    is_structseq_instance, namedtuple_fields, structseq_fields,
-};
-pub use registry::PyTreeKind;
+pub use flatten::is_leaf;
