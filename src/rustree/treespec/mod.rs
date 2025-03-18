@@ -14,5 +14,7 @@
 // =============================================================================
 
 mod flatten;
+mod treespec;
 
 pub use flatten::is_leaf;
+pub use treespec::PyTreeSpec;
