@@ -54,6 +54,12 @@ Documentation = "https://rustree.readthedocs.io"
 python-source = "."
 python-packages = ["rustree"]
 module-name = "rustree._rs"
+include = [
+    "/pyproject.toml",
+    "/rustree/**/*.py",
+    "/rustree/**/*.pyi",
+    "/rustree/**/py.typed",
+]
 bindings = 'pyo3'
 features = ["pyo3/extension-module"]
 compatibility = "manylinux2014"

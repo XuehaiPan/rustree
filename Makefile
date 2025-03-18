@@ -19,8 +19,8 @@ SHELL          = /bin/bash
 .SHELLFLAGS    := -eu -o pipefail -c
 PROJECT_PATH   = $(PROJECT_NAME)
 SOURCE_FOLDERS = $(PROJECT_PATH) include src tests docs
-PYTHON_FILES   = $(shell find $(SOURCE_FOLDERS) -type f -iname "*.py" -o -iname "*.pyi")
-RUST_FILES     = $(shell find $(SOURCE_FOLDERS) -type f -iname "*.rs")
+PYTHON_FILES   = $(shell find $(SOURCE_FOLDERS) -type f -iname "*.py" -o -iname "*.pyi") setup.py
+RUST_FILES     = $(shell find $(SOURCE_FOLDERS) -type f -iname "*.rs") build.rs
 COMMIT_HASH    = $(shell git rev-parse HEAD)
 COMMIT_HASH_SHORT = $(shell git rev-parse --short=7 HEAD)
 GOPATH         ?= $(HOME)/go

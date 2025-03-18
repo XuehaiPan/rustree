@@ -1,7 +1,25 @@
 [package]
 name = "rustree"
 version = "0.0.1"
+description = "Optimized PyTree Utilities written in Rust."
+readme = "README.md"
 authors = ["Xuehai Pan <XuehaiPan@pku.edu.cn>"]
+license = "Apache-2.0"
+license-file = "LICENSE"
+repository = "https://github.com/XuehaiPan/rustree"
+keywords = [
+    "PyTree",
+    "Tree Manipulation",
+    "Tree Traversal",
+    "Functional Programming",
+]
+categories = ["api-bindings", "utilities"]
+include = [
+    "/src/**/*.rs",
+    "/build.rs",
+    "/README.md",
+    "/LICENSE",
+]
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
