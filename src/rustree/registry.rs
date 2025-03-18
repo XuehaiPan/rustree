@@ -22,6 +22,7 @@ use pyo3::types::*;
 use std::collections::hash_map::Entry as HashMapEntry;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
+use std::sync::Arc;
 
 #[pyclass(eq, eq_int, module = "rustree", rename_all = "UPPERCASE")]
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -72,16 +73,16 @@ static mut REGISTRY_NONE_IS_LEAF: GILOnceCell<PyTreeTypeRegistry> = GILOnceCell:
 static mut DICT_INSERTION_ORDERED_NAMESPACES: OnceCell<HashSet<String>> = OnceCell::new();
 
 pub struct PyTreeTypeRegistration {
-    kind: PyTreeKind,
-    node_type: Py<PyType>,
-    flatten_func: Option<Py<PyAny>>,
-    unflatten_func: Option<Py<PyAny>>,
-    path_entry_type: Option<Py<PyType>>,
+    pub kind: PyTreeKind,
+    pub r#type: Py<PyType>,
+    pub flatten_func: Option<Py<PyAny>>,
+    pub unflatten_func: Option<Py<PyAny>>,
+    pub path_entry_type: Option<Py<PyType>>,
 }
 
 pub struct PyTreeTypeRegistry {
-    registrations: HashMap<IdHashedPy<PyType>, PyTreeTypeRegistration>,
-    named_registrations: HashMap<(String, IdHashedPy<PyType>), PyTreeTypeRegistration>,
+    registrations: HashMap<IdHashedPy<PyType>, Arc<PyTreeTypeRegistration>>,
+    named_registrations: HashMap<(String, IdHashedPy<PyType>), Arc<PyTreeTypeRegistration>>,
     builtin_types: HashSet<IdHashedPy<PyType>>,
 }
 
@@ -106,13 +107,13 @@ impl PyTreeTypeRegistry {
                     singleton
                         .registrations
                         .entry(node_type.clone_ref(py).into())
-                        .or_insert(PyTreeTypeRegistration {
+                        .or_insert(Arc::new(PyTreeTypeRegistration {
                             kind,
-                            node_type: node_type.clone_ref(py),
+                            r#type: node_type.clone_ref(py),
                             flatten_func: None,
                             unflatten_func: None,
                             path_entry_type: None,
-                        });
+                        }));
                 };
 
                 if none_is_leaf {
@@ -159,7 +160,7 @@ impl PyTreeTypeRegistry {
         &'static self,
         cls: &Bound<'_, PyType>,
         namespace: &str,
-    ) -> Option<&'static PyTreeTypeRegistration> {
+    ) -> Option<&'static Arc<PyTreeTypeRegistration>> {
         if !namespace.is_empty() {
             if let Some(registration) = self
                 .named_registrations
@@ -176,7 +177,7 @@ impl PyTreeTypeRegistry {
         cls: &Bound<'_, PyType>,
         none_is_leaf: Option<bool>,
         namespace: Option<&str>,
-    ) -> Option<&'static PyTreeTypeRegistration> {
+    ) -> Option<&'static Arc<PyTreeTypeRegistration>> {
         PyTreeTypeRegistry::get_singleton(cls.py(), none_is_leaf.unwrap_or(false))
             .lookup_impl(cls, namespace.unwrap_or(""))
     }
@@ -206,13 +207,13 @@ impl PyTreeTypeRegistry {
                     )));
                 }
                 HashMapEntry::Vacant(entry) => {
-                    entry.insert(PyTreeTypeRegistration {
+                    entry.insert(Arc::new(PyTreeTypeRegistration {
                         kind: PyTreeKind::Custom,
-                        node_type: cls.clone().unbind(),
+                        r#type: cls.clone().unbind(),
                         flatten_func: Some(flatten_func.clone().unbind()),
                         unflatten_func: Some(unflatten_func.clone().unbind()),
                         path_entry_type: Some(path_entry_type.clone().unbind()),
-                    });
+                    }));
                 }
             };
             if is_structseq_class(cls)? {
@@ -255,13 +256,13 @@ impl PyTreeTypeRegistry {
                     )));
                 }
                 HashMapEntry::Vacant(entry) => {
-                    entry.insert(PyTreeTypeRegistration {
+                    entry.insert(Arc::new(PyTreeTypeRegistration {
                         kind: PyTreeKind::Custom,
-                        node_type: cls.clone().unbind(),
+                        r#type: cls.clone().unbind(),
                         flatten_func: Some(flatten_func.clone().unbind()),
                         unflatten_func: Some(unflatten_func.clone().unbind()),
                         path_entry_type: Some(path_entry_type.clone().unbind()),
-                    });
+                    }));
                 }
             };
             if is_structseq_class(cls)? {
