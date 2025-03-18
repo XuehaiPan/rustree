@@ -15,6 +15,7 @@
 
 # pylint: disable=all
 
+import builtins
 import enum
 from collections.abc import Callable, Collection
 
@@ -56,6 +57,15 @@ class PyTreeKind(enum.IntEnum):
     DEFAULTDICT = enum.auto()  # a collections.defaultdict
     DEQUE = enum.auto()  # a collections.deque
     STRUCTSEQUENCE = enum.auto()  # a PyStructSequence
+
+class PyTreeSpec:
+    num_nodes: int
+    num_leaves: int
+    num_children: int
+    none_is_leaf: bool
+    namespace: str
+    type: builtins.type | None
+    kind: PyTreeKind
 
 def register_node(
     cls: type[Collection[T]],

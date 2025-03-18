@@ -199,11 +199,11 @@ fn structseq_fields_impl<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, P
 
     #[cfg(not(PyPy))]
     {
-        let n_sequence_fields = cls.getattr("n_sequence_fields")?.extract::<isize>()?;
+        let n_sequence_fields = cls.getattr("n_sequence_fields")?.extract::<usize>()?;
         let members = unsafe { (*cls.as_type_ptr()).tp_members };
         // Fill tuple with member names
         for i in 0..n_sequence_fields {
-            let member = unsafe { &*members.offset(i) };
+            let member = unsafe { &*members.offset(i as isize) };
             let field = unsafe {
                 std::ffi::CStr::from_ptr(member.name)
                     .to_string_lossy()
