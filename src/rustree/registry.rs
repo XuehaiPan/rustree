@@ -13,6 +13,7 @@
 // limitations under the License.
 // =============================================================================
 
+use crate::rustree::pytypes::{get_defaultdict, get_deque, get_ordereddict};
 use crate::rustree::pytypes::{is_namedtuple_class, is_structseq_class};
 use once_cell::sync::OnceCell;
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -95,13 +96,6 @@ impl PyTreeTypeRegistry {
                     named_registrations: HashMap::new(),
                     builtin_types: HashSet::new(),
                 };
-                let collections = py.import("collections").unwrap();
-                let ordereddict = collections.getattr("OrderedDict").unwrap();
-                let defaultdict = collections.getattr("defaultdict").unwrap();
-                let deque = collections.getattr("deque").unwrap();
-                let ordereddict = ordereddict.extract::<Bound<PyType>>().unwrap();
-                let defaultdict = defaultdict.extract::<Bound<PyType>>().unwrap();
-                let deque = deque.extract::<Bound<PyType>>().unwrap();
 
                 let mut register = |node_type: Py<PyType>, kind: PyTreeKind| {
                     singleton
@@ -122,9 +116,9 @@ impl PyTreeTypeRegistry {
                 register(py.get_type::<PyTuple>().unbind(), PyTreeKind::Tuple);
                 register(py.get_type::<PyList>().unbind(), PyTreeKind::List);
                 register(py.get_type::<PyDict>().unbind(), PyTreeKind::Dict);
-                register(ordereddict.unbind(), PyTreeKind::OrderedDict);
-                register(defaultdict.unbind(), PyTreeKind::DefaultDict);
-                register(deque.unbind(), PyTreeKind::Deque);
+                register(get_ordereddict(py), PyTreeKind::OrderedDict);
+                register(get_defaultdict(py), PyTreeKind::DefaultDict);
+                register(get_deque(py), PyTreeKind::Deque);
 
                 for type_ in singleton.registrations.keys() {
                     singleton.builtin_types.insert(type_.0.clone_ref(py).into());
