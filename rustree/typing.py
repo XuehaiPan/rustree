@@ -16,24 +16,73 @@
 
 from __future__ import annotations
 
+import abc
 import functools
 import platform
 import sys
 import types
-from typing import Any, Callable, ClassVar, Final, Iterable, Tuple, TypeVar
+from collections.abc import Hashable
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Collection,
+    DefaultDict,
+    Deque,
+    Dict,
+    Final,
+    Iterable,
+    List,
+    Optional,
+    OrderedDict,
+    Protocol,
+    Sequence,
+    Tuple,
+    TypeVar,
+    runtime_checkable,
+)
 from typing_extensions import (
     NamedTuple,  # Generic NamedTuple: Python 3.11+
     Never,  # Python 3.11+
     ParamSpec,  # Python 3.10+
     Self,  # Python 3.11+
+    TypeAlias,  # Python 3.10+
 )
 
 import rustree._rs as _rs
 from rustree._rs import PyTreeKind
+from rustree.accessor import (
+    AutoEntry,
+    DataclassEntry,
+    FlattenedEntry,
+    GetAttrEntry,
+    GetItemEntry,
+    MappingEntry,
+    NamedTupleEntry,
+    PyTreeAccessor,
+    PyTreeEntry,
+    SequenceEntry,
+    StructSequenceEntry,
+)
 
 
 __all__ = [
     'PyTreeKind',
+    'Children',
+    'MetaData',
+    'FlattenFunc',
+    'UnflattenFunc',
+    'PyTreeEntry',
+    'GetItemEntry',
+    'GetAttrEntry',
+    'FlattenedEntry',
+    'AutoEntry',
+    'SequenceEntry',
+    'MappingEntry',
+    'NamedTupleEntry',
+    'StructSequenceEntry',
+    'DataclassEntry',
+    'PyTreeAccessor',
     'is_namedtuple',
     'is_namedtuple_class',
     'is_namedtuple_instance',
@@ -49,7 +98,15 @@ __all__ = [
     'VT',
     'P',
     'F',
+    'Iterable',
+    'Sequence',
+    'List',
+    'Tuple',
     'NamedTuple',
+    'Dict',
+    'OrderedDict',
+    'DefaultDict',
+    'Deque',
 ]
 
 
@@ -60,6 +117,51 @@ KT = TypeVar('KT')
 VT = TypeVar('VT')
 P = ParamSpec('P')
 F = TypeVar('F', bound=Callable[..., Any])
+
+
+Children: TypeAlias = Iterable[T]
+MetaData: TypeAlias = Optional[Hashable]
+
+
+@runtime_checkable
+class CustomTreeNode(Protocol[T]):
+    """The abstract base class for custom pytree nodes."""
+
+    def tree_flatten(
+        self,
+        /,
+    ) -> (
+        # Use `range(num_children)` as path entries
+        tuple[Children[T], MetaData]
+        |
+        # With optionally implemented path entries
+        tuple[Children[T], MetaData, Iterable[Any] | None]
+    ):
+        """Flatten the custom pytree node into children and metadata."""
+
+    @classmethod
+    def tree_unflatten(cls, metadata: MetaData, children: Children[T], /) -> Self:
+        """Unflatten the children and metadata into the custom pytree node."""
+
+
+class FlattenFunc(Protocol[T]):  # pylint: disable=too-few-public-methods
+    """The type stub class for flatten functions."""
+
+    @abc.abstractmethod
+    def __call__(
+        self,
+        container: Collection[T],
+        /,
+    ) -> tuple[Children[T], MetaData] | tuple[Children[T], MetaData, Iterable[Any] | None]:
+        """Flatten the container into children and metadata."""
+
+
+class UnflattenFunc(Protocol[T]):  # pylint: disable=too-few-public-methods
+    """The type stub class for unflatten functions."""
+
+    @abc.abstractmethod
+    def __call__(self, metadata: MetaData, children: Children[T], /) -> Collection[T]:
+        """Unflatten the children and metadata back into the container."""
 
 
 def _override_with_(

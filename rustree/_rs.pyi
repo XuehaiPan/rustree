@@ -16,9 +16,14 @@
 # pylint: disable=all
 
 import enum
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 
-from rustree.typing import T
+from rustree.typing import (
+    FlattenFunc,
+    PyTreeEntry,
+    T,
+    UnflattenFunc,
+)
 
 # Set if the type allows subclassing (see CPython's Include/object.h)
 Py_TPFLAGS_BASETYPE: int  # (1UL << 10)
@@ -51,3 +56,26 @@ class PyTreeKind(enum.IntEnum):
     DEFAULTDICT = enum.auto()  # a collections.defaultdict
     DEQUE = enum.auto()  # a collections.deque
     STRUCTSEQUENCE = enum.auto()  # a PyStructSequence
+
+def register_node(
+    cls: type[Collection[T]],
+    /,
+    flatten_func: FlattenFunc[T],
+    unflatten_func: UnflattenFunc[T],
+    path_entry_type: type[PyTreeEntry],
+    namespace: str = '',
+) -> None: ...
+def unregister_node(
+    cls: type[Collection[T]],
+    /,
+    namespace: str = '',
+) -> None: ...
+def is_dict_insertion_ordered(
+    namespace: str = '',
+    inherit_global_namespace: bool = True,
+) -> bool: ...
+def set_dict_insertion_ordered(
+    mode: bool,
+    /,
+    namespace: str = '',
+) -> None: ...

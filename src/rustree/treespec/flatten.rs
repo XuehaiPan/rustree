@@ -14,17 +14,16 @@
 // =============================================================================
 
 use pyo3::prelude::*;
-use pyo3::types::PyFunction;
 
 use crate::rustree::pytypes::{is_namedtuple_class, is_structseq_class};
-use crate::rustree::registry::registry_lookup;
+use crate::rustree::registry::PyTreeTypeRegistry;
 
 #[pyfunction]
 #[pyo3(signature = (obj, /, leaf_predicate=None, none_is_leaf=false, namespace=""))]
 #[inline]
 pub fn is_leaf(
     obj: &Bound<PyAny>,
-    leaf_predicate: Option<&Bound<PyFunction>>,
+    leaf_predicate: Option<&Bound<PyAny>>,
     none_is_leaf: Option<bool>,
     namespace: Option<&str>,
 ) -> PyResult<bool> {
@@ -35,7 +34,7 @@ pub fn is_leaf(
             return Ok(true);
         }
     }
-    if registry_lookup(&cls, none_is_leaf, namespace).is_some() {
+    if PyTreeTypeRegistry::lookup(&cls, none_is_leaf, namespace).is_some() {
         return Ok(false);
     };
     Ok(!(is_namedtuple_class(&cls)? || is_structseq_class(&cls)?))
