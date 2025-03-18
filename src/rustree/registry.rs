@@ -425,8 +425,8 @@ impl PyTreeTypeRegistry {
         let dict_insertion_ordered_namespaces =
             unsafe { DICT_INSERTION_ORDERED_NAMESPACES.get_or_init(HashSet::new) };
 
-        dict_insertion_ordered_namespaces.contains(namespace.into())
-            || (inherit_global_namespace && dict_insertion_ordered_namespaces.contains("".into()))
+        dict_insertion_ordered_namespaces.contains(namespace)
+            || (inherit_global_namespace && dict_insertion_ordered_namespaces.contains(""))
     }
 
     #[inline]
@@ -445,7 +445,7 @@ impl PyTreeTypeRegistry {
         if mode {
             dict_insertion_ordered_namespaces.insert(namespace.into());
         } else {
-            dict_insertion_ordered_namespaces.remove(namespace.into());
+            dict_insertion_ordered_namespaces.remove(namespace);
         }
     }
 }
