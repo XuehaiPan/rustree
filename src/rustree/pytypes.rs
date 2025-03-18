@@ -16,7 +16,46 @@
 use pyo3::exceptions::PyTypeError;
 use pyo3::ffi;
 use pyo3::prelude::*;
+use pyo3::sync::GILOnceCell;
 use pyo3::types::*;
+
+pub fn get_rust_module(py: Python, module: Option<Py<PyModule>>) -> &Py<PyModule> {
+    static RUST_MODULE: GILOnceCell<Py<PyModule>> = GILOnceCell::new();
+    RUST_MODULE.get_or_init(py, || {
+        assert!(module.is_some());
+        module.unwrap()
+    })
+}
+
+pub fn get_ordereddict(py: Python) -> Py<PyType> {
+    static ORDEREDDICT: GILOnceCell<PyObject> = GILOnceCell::new();
+    ORDEREDDICT
+        .import(py, "collections", "OrderedDict")
+        .unwrap()
+        .extract::<Bound<PyType>>()
+        .unwrap()
+        .unbind()
+}
+
+pub fn get_defaultdict(py: Python) -> Py<PyType> {
+    static DEFAULTDICT: GILOnceCell<PyObject> = GILOnceCell::new();
+    DEFAULTDICT
+        .import(py, "collections", "defaultdict")
+        .unwrap()
+        .extract::<Bound<PyType>>()
+        .unwrap()
+        .unbind()
+}
+
+pub fn get_deque(py: Python) -> Py<PyType> {
+    static DEQUE: GILOnceCell<PyObject> = GILOnceCell::new();
+    DEQUE
+        .import(py, "collections", "deque")
+        .unwrap()
+        .extract::<Bound<PyType>>()
+        .unwrap()
+        .unbind()
+}
 
 #[inline]
 fn is_namedtuple_class_impl(cls: &Bound<PyType>) -> bool {
