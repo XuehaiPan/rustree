@@ -23,21 +23,20 @@ use std::collections::hash_map::Entry as HashMapEntry;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 
-#[pyclass(eq, eq_int, module = "rustree")]
-#[derive(PartialEq)]
-#[allow(clippy::upper_case_acronyms)]
+#[pyclass(eq, eq_int, module = "rustree", rename_all = "UPPERCASE")]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum PyTreeKind {
-    CUSTOM = 0,
-    LEAF,
-    NONE,
-    TUPLE,
-    LIST,
-    DICT,
-    NAMEDTUPLE,
-    ORDEREDDICT,
-    DEFAULTDICT,
-    DEQUE,
-    STRUCTSEQUENCE,
+    Custom = 0,
+    Leaf,
+    None,
+    Tuple,
+    List,
+    Dict,
+    NamedTuple,
+    OrderedDict,
+    DefaultDict,
+    Deque,
+    StructSequence,
 }
 
 #[repr(transparent)]
@@ -117,14 +116,14 @@ impl PyTreeTypeRegistry {
                 };
 
                 if none_is_leaf {
-                    register(py.get_type::<PyNone>().unbind(), PyTreeKind::LEAF);
+                    register(py.get_type::<PyNone>().unbind(), PyTreeKind::Leaf);
                 }
-                register(py.get_type::<PyTuple>().unbind(), PyTreeKind::TUPLE);
-                register(py.get_type::<PyList>().unbind(), PyTreeKind::LIST);
-                register(py.get_type::<PyDict>().unbind(), PyTreeKind::DICT);
-                register(ordereddict.unbind(), PyTreeKind::ORDEREDDICT);
-                register(defaultdict.unbind(), PyTreeKind::DEFAULTDICT);
-                register(deque.unbind(), PyTreeKind::DEQUE);
+                register(py.get_type::<PyTuple>().unbind(), PyTreeKind::Tuple);
+                register(py.get_type::<PyList>().unbind(), PyTreeKind::List);
+                register(py.get_type::<PyDict>().unbind(), PyTreeKind::Dict);
+                register(ordereddict.unbind(), PyTreeKind::OrderedDict);
+                register(defaultdict.unbind(), PyTreeKind::DefaultDict);
+                register(deque.unbind(), PyTreeKind::Deque);
 
                 for type_ in singleton.registrations.keys() {
                     singleton.builtin_types.insert(type_.0.clone_ref(py).into());
@@ -208,7 +207,7 @@ impl PyTreeTypeRegistry {
                 }
                 HashMapEntry::Vacant(entry) => {
                     entry.insert(PyTreeTypeRegistration {
-                        kind: PyTreeKind::CUSTOM,
+                        kind: PyTreeKind::Custom,
                         node_type: cls.clone().unbind(),
                         flatten_func: Some(flatten_func.clone().unbind()),
                         unflatten_func: Some(unflatten_func.clone().unbind()),
@@ -257,7 +256,7 @@ impl PyTreeTypeRegistry {
                 }
                 HashMapEntry::Vacant(entry) => {
                     entry.insert(PyTreeTypeRegistration {
-                        kind: PyTreeKind::CUSTOM,
+                        kind: PyTreeKind::Custom,
                         node_type: cls.clone().unbind(),
                         flatten_func: Some(flatten_func.clone().unbind()),
                         unflatten_func: Some(unflatten_func.clone().unbind()),
