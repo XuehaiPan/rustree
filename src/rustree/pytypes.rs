@@ -177,19 +177,20 @@ fn structseq_fields_impl<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, P
     {
         let locals = PyDict::new(py);
         locals.set_item("cls", cls)?;
-        locals.set_item("fields", fields)?;
+        locals.set_item("fields", &fields)?;
         py.run(
             ffi::c_str!(
                 r#"
-            from _structseq import structseqfield
+                import sys
 
-            indices_by_name = {
-                name: member.index
-                for name, member in vars(cls).items()
-                if isinstance(member, structseqfield)
-            }
-            fields.extend(sorted(indices_by_name, key=indices_by_name.get)[:cls.n_sequence_fields])
-            "#
+                StructSequenceFieldType = type(type(sys.version_info).major)
+                indices_by_name = {
+                    name: member.index
+                    for name, member in vars(cls).items()
+                    if isinstance(member, StructSequenceFieldType)
+                }
+                fields.extend(sorted(indices_by_name, key=indices_by_name.get)[:cls.n_sequence_fields])
+                "#
             ),
             None,
             Some(&locals),
