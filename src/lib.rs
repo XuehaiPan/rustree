@@ -38,5 +38,7 @@ fn build_extension(m: &Bound<PyModule>) -> PyResult<()> {
 
     m.add_class::<rustree::treespec::PyTreeSpec>()?;
     m.add_function(wrap_pyfunction!(rustree::treespec::is_leaf, m)?)?;
+
+    rustree::get_rust_module(m.py(), Some(m.clone().unbind()));
     Ok(())
 }

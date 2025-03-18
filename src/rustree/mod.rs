@@ -17,6 +17,7 @@ mod pytypes;
 mod registry;
 pub mod treespec;
 
+pub use pytypes::get_rust_module;
 pub use pytypes::{is_namedtuple, is_namedtuple_class, is_namedtuple_instance, namedtuple_fields};
 pub use pytypes::{is_structseq, is_structseq_class, is_structseq_instance, structseq_fields};
 pub use registry::PyTreeKind;

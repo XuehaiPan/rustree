@@ -17,6 +17,7 @@ use pyo3::prelude::*;
 use pyo3::types::*;
 use std::sync::Arc;
 
+use crate::rustree::pytypes::{get_defaultdict, get_deque, get_ordereddict};
 use crate::rustree::registry::{PyTreeKind, PyTreeTypeRegistration};
 
 struct Node {
@@ -31,7 +32,7 @@ struct Node {
 }
 
 impl Node {
-    fn get_type(&self, py: Python<'_>) -> Py<PyAny> {
+    fn get_type(&self, py: Python) -> Py<PyAny> {
         match self.kind {
             PyTreeKind::Custom => self
                 .custom
@@ -49,15 +50,9 @@ impl Node {
             PyTreeKind::NamedTuple | PyTreeKind::StructSequence => {
                 self.node_data.as_ref().unwrap().clone_ref(py)
             }
-            PyTreeKind::OrderedDict | PyTreeKind::DefaultDict | PyTreeKind::Deque => {
-                let collections = py.import("collections").unwrap();
-                match self.kind {
-                    PyTreeKind::OrderedDict => collections.getattr("OrderedDict").unwrap().unbind(),
-                    PyTreeKind::DefaultDict => collections.getattr("defaultdict").unwrap().unbind(),
-                    PyTreeKind::Deque => collections.getattr("deque").unwrap().unbind(),
-                    _ => unreachable!(),
-                }
-            }
+            PyTreeKind::OrderedDict => get_ordereddict(py).into_any(),
+            PyTreeKind::DefaultDict => get_defaultdict(py).into_any(),
+            PyTreeKind::Deque => get_deque(py).into_any(),
         }
     }
 }
@@ -103,7 +98,7 @@ impl PyTreeSpec {
 
     #[getter]
     #[inline]
-    fn r#type(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    fn r#type(&self, py: Python) -> PyResult<Py<PyAny>> {
         Ok(self.traversal.last().unwrap().get_type(py))
     }
 
