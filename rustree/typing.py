@@ -22,6 +22,7 @@ import sys
 import types
 from typing import Any, Callable, ClassVar, Final, Iterable, Tuple, TypeVar
 from typing_extensions import (
+    NamedTuple,  # Generic NamedTuple: Python 3.11+
     Never,  # Python 3.11+
     ParamSpec,  # Python 3.10+
     Self,  # Python 3.11+
@@ -48,6 +49,7 @@ __all__ = [
     'VT',
     'P',
     'F',
+    'NamedTuple',
 ]
 
 

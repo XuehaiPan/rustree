@@ -14,7 +14,20 @@
 # ==============================================================================
 """RusTree: Optimized PyTree Utilities written in Rust."""
 
-from rustree import typing
+from rustree import accessor, typing
+from rustree.accessor import (
+    AutoEntry,
+    DataclassEntry,
+    FlattenedEntry,
+    GetAttrEntry,
+    GetItemEntry,
+    MappingEntry,
+    NamedTupleEntry,
+    PyTreeAccessor,
+    PyTreeEntry,
+    SequenceEntry,
+    StructSequenceEntry,
+)
 from rustree.ops import tree_is_leaf
 from rustree.typing import (
     PyTreeKind,
@@ -30,7 +43,9 @@ from rustree.typing import (
 
 
 __all__ = [
+    # Tree operations
     'tree_is_leaf',
+    # Typing
     'PyTreeKind',
     'is_namedtuple',
     'is_namedtuple_class',
@@ -40,4 +55,16 @@ __all__ = [
     'is_structseq_instance',
     'is_structseq_class',
     'structseq_fields',
+    # Accessor
+    'PyTreeEntry',
+    'GetAttrEntry',
+    'GetItemEntry',
+    'FlattenedEntry',
+    'AutoEntry',
+    'SequenceEntry',
+    'MappingEntry',
+    'NamedTupleEntry',
+    'StructSequenceEntry',
+    'DataclassEntry',
+    'PyTreeAccessor',
 ]
