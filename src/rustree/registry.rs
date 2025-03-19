@@ -69,8 +69,6 @@ impl<T> std::hash::Hash for IdHashedPy<T> {
     }
 }
 
-static mut REGISTRY_NONE_IS_NODE: GILOnceCell<PyTreeTypeRegistry> = GILOnceCell::new();
-static mut REGISTRY_NONE_IS_LEAF: GILOnceCell<PyTreeTypeRegistry> = GILOnceCell::new();
 static mut DICT_INSERTION_ORDERED_NAMESPACES: OnceCell<HashSet<String>> = OnceCell::new();
 
 pub struct PyTreeTypeRegistration {
@@ -88,7 +86,10 @@ pub struct PyTreeTypeRegistry {
 }
 
 impl PyTreeTypeRegistry {
-    fn new(py: Python<'_>, none_is_leaf: bool) -> &'static mut Self {
+    fn new(py: Python, none_is_leaf: bool) -> &'static mut Self {
+        static mut REGISTRY_NONE_IS_NODE: GILOnceCell<PyTreeTypeRegistry> = GILOnceCell::new();
+        static mut REGISTRY_NONE_IS_LEAF: GILOnceCell<PyTreeTypeRegistry> = GILOnceCell::new();
+
         let init_fn = |none_is_leaf: bool| {
             move || {
                 let mut singleton = PyTreeTypeRegistry {
@@ -145,7 +146,7 @@ impl PyTreeTypeRegistry {
     }
 
     #[inline]
-    fn get_singleton(py: Python<'_>, none_is_leaf: bool) -> &'static mut Self {
+    fn get_singleton(py: Python, none_is_leaf: bool) -> &'static mut Self {
         Self::new(py, none_is_leaf)
     }
 
@@ -437,7 +438,7 @@ impl PyTreeTypeRegistry {
             unsafe { DICT_INSERTION_ORDERED_NAMESPACES.get_mut() }.unwrap();
 
         if mode {
-            dict_insertion_ordered_namespaces.insert(namespace.into());
+            dict_insertion_ordered_namespaces.insert(String::from(namespace));
         } else {
             dict_insertion_ordered_namespaces.remove(namespace);
         }
