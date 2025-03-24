@@ -21,14 +21,24 @@ from collections.abc import Callable, Collection
 
 from rustree.typing import (
     FlattenFunc,
+    PyTree,
     PyTreeEntry,
     T,
     UnflattenFunc,
 )
 
+MAX_RECURSION_DEPTH: int
+
 # Set if the type allows subclassing (see CPython's Include/object.h)
 Py_TPFLAGS_BASETYPE: int  # (1UL << 10)
 
+def flatten(
+    tree: PyTree[T],
+    /,
+    leaf_predicate: Callable[[T], bool] | None = None,
+    none_is_leaf: bool = False,
+    namespace: str = '',
+) -> tuple[list[T], PyTreeSpec]: ...
 def is_leaf(
     obj: T,
     /,

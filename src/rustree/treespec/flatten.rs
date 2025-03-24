@@ -13,14 +13,11 @@
 // limitations under the License.
 // =============================================================================
 
-use std::sync::Arc;
-
 use pyo3::exceptions::{PyRecursionError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::*;
 
-use crate::rustree::pytypes::{is_namedtuple_class, is_structseq_class};
-use crate::rustree::registry::{PyTreeKind, PyTreeTypeRegistration, PyTreeTypeRegistry};
+use crate::rustree::registry::{PyTreeKind, PyTreeTypeRegistry};
 
 use crate::rustree::treespec::PyTreeSpec;
 use crate::rustree::treespec::treespec::Node;
@@ -40,10 +37,10 @@ pub fn is_leaf(
         return Ok(true);
     }
     if let (PyTreeKind::Leaf, ..) = PyTreeTypeRegistry::lookup(obj, none_is_leaf, namespace) {
-        return Ok(true);
+        Ok(true)
+    } else {
+        Ok(false)
     }
-    let cls = &obj.get_type();
-    Ok(!(is_namedtuple_class(cls)? || is_structseq_class(cls)?))
 }
 
 impl PyTreeSpec {
@@ -70,9 +67,9 @@ impl PyTreeSpec {
         if leaf_predicate.is_some() && leaf_predicate.unwrap().call1((obj,))?.is_truthy()? {
             leaves.push(obj.clone().unbind());
         } else {
-            let registration: Option<Arc<PyTreeTypeRegistration>>;
-            (node.kind, registration) =
+            let (kind, registration) =
                 PyTreeTypeRegistry::lookup(obj, Some(none_is_leaf), Some(namespace));
+            node.kind = kind;
 
             let mut recurse = |child| {
                 Self::flatten_into_impl(
@@ -203,6 +200,8 @@ impl PyTreeSpec {
     ) -> PyResult<(Vec<Py<PyAny>>, PyTreeSpec)> {
         let mut traversal = Vec::new();
         let mut leaves = Vec::new();
+        traversal.reserve(4);
+        leaves.reserve(4);
         let found_custom = Self::flatten_into_impl(
             obj,
             &mut traversal,
@@ -212,6 +211,8 @@ impl PyTreeSpec {
             none_is_leaf,
             namespace,
         )?;
+
+        traversal.shrink_to_fit();
         let namespace = if found_custom {
             String::from(namespace)
         } else {
@@ -227,8 +228,8 @@ impl PyTreeSpec {
 #[pyo3(signature = (obj, /, leaf_predicate=None, none_is_leaf=false, namespace=""))]
 #[inline]
 pub fn flatten(
-    obj: &Bound<'_, PyAny>,
-    leaf_predicate: Option<&Bound<'_, PyAny>>,
+    obj: &Bound<PyAny>,
+    leaf_predicate: Option<&Bound<PyAny>>,
     none_is_leaf: Option<bool>,
     namespace: Option<&str>,
 ) -> PyResult<(Vec<Py<PyAny>>, PyTreeSpec)> {

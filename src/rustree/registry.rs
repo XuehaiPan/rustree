@@ -26,7 +26,7 @@ use std::ffi::CString;
 use std::sync::Arc;
 
 #[pyclass(eq, eq_int, module = "rustree", rename_all = "UPPERCASE")]
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum PyTreeKind {
     Custom = 0,
     Leaf,
@@ -104,15 +104,15 @@ impl PyTreeTypeRegistry {
                         .entry(node_type.clone_ref(py).into())
                         .or_insert(Arc::new(PyTreeTypeRegistration {
                             kind,
-                            r#type: node_type.clone_ref(py),
+                            r#type: node_type,
                             flatten_func: None,
                             unflatten_func: None,
                             path_entry_type: None,
                         }));
                 };
 
-                if none_is_leaf {
-                    register(py.get_type::<PyNone>().unbind(), PyTreeKind::Leaf);
+                if !none_is_leaf {
+                    register(py.get_type::<PyNone>().unbind(), PyTreeKind::None);
                 }
                 register(py.get_type::<PyTuple>().unbind(), PyTreeKind::Tuple);
                 register(py.get_type::<PyList>().unbind(), PyTreeKind::List);
@@ -121,8 +121,10 @@ impl PyTreeTypeRegistry {
                 register(get_defaultdict(py), PyTreeKind::DefaultDict);
                 register(get_deque(py), PyTreeKind::Deque);
 
-                for type_ in singleton.registrations.keys() {
-                    singleton.builtin_types.insert(type_.0.clone_ref(py).into());
+                for hashed_type in singleton.registrations.keys() {
+                    singleton
+                        .builtin_types
+                        .insert(hashed_type.0.clone_ref(py).into());
                 }
                 singleton
                     .builtin_types
@@ -133,10 +135,10 @@ impl PyTreeTypeRegistry {
         };
 
         #[allow(static_mut_refs)]
-        match none_is_leaf {
-            false => unsafe { REGISTRY_NONE_IS_NODE.get_or_init(py, init_fn(false)) },
-            true => unsafe { REGISTRY_NONE_IS_LEAF.get_or_init(py, init_fn(true)) },
-        };
+        unsafe {
+            REGISTRY_NONE_IS_NODE.get_or_init(py, init_fn(false));
+            REGISTRY_NONE_IS_LEAF.get_or_init(py, init_fn(true));
+        }
 
         #[allow(static_mut_refs)]
         match none_is_leaf {
@@ -162,11 +164,15 @@ impl PyTreeTypeRegistry {
                 .named_registrations
                 .get(&(String::from(namespace), cls.clone().unbind().into()))
             {
-                return (registration.kind, Some(registration.clone()));
+                return (registration.as_ref().kind, Some(registration.clone()));
             }
         }
         if let Some(registration) = self.registrations.get(&cls.clone().unbind().into()) {
-            (registration.kind, Some(registration.clone()))
+            (registration.as_ref().kind, Some(registration.clone()))
+        } else if is_structseq_class(cls).unwrap() {
+            (PyTreeKind::StructSequence, None)
+        } else if is_namedtuple_class(cls).unwrap() {
+            (PyTreeKind::NamedTuple, None)
         } else {
             (PyTreeKind::Leaf, None)
         }
