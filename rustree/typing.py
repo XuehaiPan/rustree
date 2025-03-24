@@ -31,7 +31,12 @@ from typing import (
     Deque,
     Dict,
     Final,
+    ForwardRef,
+    Generic,
+    ItemsView,
     Iterable,
+    Iterator,
+    KeysView,
     List,
     Optional,
     OrderedDict,
@@ -39,6 +44,8 @@ from typing import (
     Sequence,
     Tuple,
     TypeVar,
+    Union,
+    ValuesView,
     runtime_checkable,
 )
 from typing_extensions import (
@@ -50,7 +57,7 @@ from typing_extensions import (
 )
 
 import rustree._rs as _rs
-from rustree._rs import PyTreeKind
+from rustree._rs import PyTreeKind, PyTreeSpec
 from rustree.accessor import (
     AutoEntry,
     DataclassEntry,
@@ -67,7 +74,11 @@ from rustree.accessor import (
 
 
 __all__ = [
+    'PyTreeSpec',
     'PyTreeKind',
+    'PyTree',
+    'PyTreeTypeVar',
+    'CustomTreeNode',
     'Children',
     'MetaData',
     'FlattenFunc',
@@ -142,6 +153,195 @@ class CustomTreeNode(Protocol[T]):
     @classmethod
     def tree_unflatten(cls, metadata: MetaData, children: Children[T], /) -> Self:
         """Unflatten the children and metadata into the custom pytree node."""
+
+
+_UnionType = type(Union[int, str])
+
+
+try:  # pragma: no cover
+    from typing import _tp_cache  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover
+
+    def _tp_cache(func: Callable[P, T], /) -> Callable[P, T]:
+        cached = functools.lru_cache(func)
+
+        @functools.wraps(func)
+        def inner(*args: P.args, **kwargs: P.kwargs) -> T:
+            try:
+                return cached(*args, **kwargs)  # type: ignore[arg-type]
+            except TypeError:
+                # All real errors (not unhashable args) are raised below.
+                return func(*args, **kwargs)
+
+        return inner
+
+
+class PyTree(Generic[T]):  # pragma: no cover
+    """Generic PyTree type.
+
+    >>> import torch
+    >>> TensorTree = PyTree[torch.Tensor]
+    >>> TensorTree  # doctest: +IGNORE_WHITESPACE
+    typing.Union[torch.Tensor,
+                 typing.Tuple[ForwardRef('PyTree[torch.Tensor]'), ...],
+                 typing.List[ForwardRef('PyTree[torch.Tensor]')],
+                 typing.Dict[typing.Any, ForwardRef('PyTree[torch.Tensor]')],
+                 typing.Deque[ForwardRef('PyTree[torch.Tensor]')],
+                 rustree.typing.CustomTreeNode[ForwardRef('PyTree[torch.Tensor]')]]
+    """
+
+    @_tp_cache
+    def __class_getitem__(  # noqa: C901
+        cls,
+        item: (
+            type[T]
+            | TypeAlias
+            | tuple[type[T] | TypeAlias]
+            | tuple[type[T] | TypeAlias, str | None]
+        ),
+    ) -> TypeAlias:
+        """Instantiate a PyTree type with the given type."""
+        if not isinstance(item, tuple):
+            item = (item, None)
+        if len(item) == 1:
+            item = (item[0], None)
+        elif len(item) != 2:
+            raise TypeError(
+                f'{cls.__name__}[...] only supports a tuple of 2 items, '
+                f'a parameter and a string of type name, got {item!r}.',
+            )
+        param, name = item
+        if name is not None and not isinstance(name, str):
+            raise TypeError(
+                f'{cls.__name__}[...] only supports a tuple of 2 items, '
+                f'a parameter and a string of type name, got {item!r}.',
+            )
+
+        if (
+            isinstance(param, _UnionType)
+            and param.__origin__ is Union  # type: ignore[attr-defined]
+            and hasattr(param, '__pytree_args__')
+        ):
+            return param  # PyTree[PyTree[T]] -> PyTree[T]
+
+        if name is not None:
+            recurse_ref = ForwardRef(name)
+        elif isinstance(param, TypeVar):
+            recurse_ref = ForwardRef(f'{cls.__name__}[{param.__name__}]')
+        elif isinstance(param, type):
+            if param.__module__ == 'builtins':
+                typename = param.__qualname__
+            else:
+                try:
+                    typename = f'{param.__module__}.{param.__qualname__}'
+                except AttributeError:
+                    typename = f'{param.__module__}.{param.__name__}'
+            recurse_ref = ForwardRef(f'{cls.__name__}[{typename}]')
+        else:
+            recurse_ref = ForwardRef(f'{cls.__name__}[{param!r}]')
+
+        pytree_alias = Union[
+            param,  # type: ignore[valid-type]
+            Tuple[recurse_ref, ...],  # type: ignore[valid-type] # Tuple, NamedTuple, PyStructSequence
+            List[recurse_ref],  # type: ignore[valid-type]
+            Dict[Any, recurse_ref],  # type: ignore[valid-type] # Dict, OrderedDict, DefaultDict
+            Deque[recurse_ref],  # type: ignore[valid-type]
+            CustomTreeNode[recurse_ref],  # type: ignore[valid-type]
+        ]
+        pytree_alias.__pytree_args__ = item  # type: ignore[attr-defined]
+
+        # pylint: disable-next=no-member
+        original_copy_with = pytree_alias.copy_with  # type: ignore[attr-defined]
+        original_num_params = len(pytree_alias.__args__)  # type: ignore[attr-defined]
+
+        def copy_with(params: tuple) -> TypeAlias:
+            if not isinstance(params, tuple) or len(params) != original_num_params:
+                return original_copy_with(params)
+            if params[0] is param:
+                return pytree_alias
+            return PyTree[params[0]]  # type: ignore[misc,valid-type]
+
+        object.__setattr__(pytree_alias, 'copy_with', copy_with)
+        return pytree_alias
+
+    def __new__(cls, /) -> Never:  # pylint: disable=arguments-differ
+        """Prohibit instantiation."""
+        raise TypeError('Cannot instantiate special typing classes.')
+
+    def __init_subclass__(cls, /, *args: Any, **kwargs: Any) -> Never:
+        """Prohibit subclassing."""
+        raise TypeError('Cannot subclass special typing classes.')
+
+    def __getitem__(self, key: Any, /) -> PyTree[T] | T:
+        """Emulate collection-like behavior."""
+        raise NotImplementedError
+
+    def __getattr__(self, name: str, /) -> PyTree[T] | T:
+        """Emulate dataclass-like behavior."""
+        raise NotImplementedError
+
+    def __contains__(self, key: Any | T, /) -> bool:
+        """Emulate collection-like behavior."""
+        raise NotImplementedError
+
+    def __len__(self, /) -> int:
+        """Emulate collection-like behavior."""
+        raise NotImplementedError
+
+    def __iter__(self, /) -> Iterator[PyTree[T] | T | Any]:
+        """Emulate collection-like behavior."""
+        raise NotImplementedError
+
+    def index(self, key: Any | T, /) -> int:
+        """Emulate sequence-like behavior."""
+        raise NotImplementedError
+
+    def count(self, key: Any | T, /) -> int:
+        """Emulate sequence-like behavior."""
+        raise NotImplementedError
+
+    def get(self, key: Any, /, default: T | None = None) -> T | None:
+        """Emulate mapping-like behavior."""
+        raise NotImplementedError
+
+    def keys(self, /) -> KeysView[Any]:
+        """Emulate mapping-like behavior."""
+        raise NotImplementedError
+
+    def values(self, /) -> ValuesView[PyTree[T] | T]:
+        """Emulate mapping-like behavior."""
+        raise NotImplementedError
+
+    def items(self, /) -> ItemsView[Any, PyTree[T] | T]:
+        """Emulate mapping-like behavior."""
+        raise NotImplementedError
+
+
+# pylint: disable-next=too-few-public-methods
+class PyTreeTypeVar:  # pragma: no cover
+    """Type variable for PyTree.
+
+    >>> import torch
+    >>> TensorTree = PyTreeTypeVar('TensorTree', torch.Tensor)
+    >>> TensorTree  # doctest: +IGNORE_WHITESPACE
+    typing.Union[torch.Tensor,
+                 typing.Tuple[ForwardRef('TensorTree'), ...],
+                 typing.List[ForwardRef('TensorTree')],
+                 typing.Dict[typing.Any, ForwardRef('TensorTree')],
+                 typing.Deque[ForwardRef('TensorTree')],
+                 rustree.typing.CustomTreeNode[ForwardRef('TensorTree')]]
+    """
+
+    @_tp_cache
+    def __new__(cls, /, name: str, param: type | TypeAlias) -> TypeAlias:
+        """Instantiate a PyTree type variable with the given name and parameter."""
+        if not isinstance(name, str):
+            raise TypeError(f'{cls.__name__} only supports a string of type name, got {name!r}.')
+        return PyTree[param, name]  # type: ignore[misc,valid-type]
+
+    def __init_subclass__(cls, /, *args: Any, **kwargs: Any) -> Never:
+        """Prohibit subclassing."""
+        raise TypeError('Cannot subclass special typing classes.')
 
 
 class FlattenFunc(Protocol[T]):  # pylint: disable=too-few-public-methods
@@ -323,13 +523,13 @@ def is_structseq_class(cls: type, /) -> bool:
         and isinstance(getattr(cls, 'n_unnamed_fields', None), int)
     ):
         # Check the type does not allow subclassing
-        if platform.python_implementation() == 'PyPy':
+        if platform.python_implementation() == 'PyPy':  # pragma: pypy cover
             try:
                 types.new_class('subclass', bases=(cls,))
             except (AssertionError, TypeError):
                 return True
             return False
-        return not bool(cls.__flags__ & Py_TPFLAGS_BASETYPE)
+        return not bool(cls.__flags__ & Py_TPFLAGS_BASETYPE)  # pragma: pypy no cover
     return False
 
 
@@ -349,17 +549,20 @@ def structseq_fields(obj: tuple | type[tuple], /) -> tuple[str, ...]:
         if not is_structseq_class(cls):
             raise TypeError(f'Expected an instance of PyStructSequence type, got {obj!r}.')
 
-    if platform.python_implementation() == 'PyPy':
+    if platform.python_implementation() == 'PyPy':  # pragma: pypy cover
         indices_by_name = {
             name: member.index  # type: ignore[attr-defined]
             for name, member in vars(cls).items()
             if isinstance(member, StructSequenceFieldType)
         }
         fields = sorted(indices_by_name, key=indices_by_name.get)  # type: ignore[arg-type]
-    else:
+    else:  # pragma: pypy no cover
         fields = [
             name
             for name, member in vars(cls).items()
             if isinstance(member, StructSequenceFieldType)
         ]
     return tuple(fields[: cls.n_sequence_fields])  # type: ignore[attr-defined]
+
+
+del _tp_cache
