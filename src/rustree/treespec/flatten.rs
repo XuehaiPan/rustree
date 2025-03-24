@@ -110,7 +110,12 @@ impl PyTreeSpec {
                     let obj = obj.downcast::<PyDict>()?;
                     node.arity = obj.len();
                     let keys = obj.keys();
-                    node.original_keys = Some(keys.call_method0("copy")?.unbind());
+                    node.original_keys = Some(
+                        keys.call_method0("copy")?
+                            .downcast::<PyList>()?
+                            .as_unbound()
+                            .clone_ref(obj.py()),
+                    );
                     if node.kind != PyTreeKind::OrderedDict {
                         keys.sort()?;
                     }
@@ -198,10 +203,8 @@ impl PyTreeSpec {
         none_is_leaf: bool,
         namespace: &str,
     ) -> PyResult<(Vec<Py<PyAny>>, PyTreeSpec)> {
-        let mut traversal = Vec::new();
-        let mut leaves = Vec::new();
-        traversal.reserve(4);
-        leaves.reserve(4);
+        let mut traversal = Vec::with_capacity(4);
+        let mut leaves = Vec::with_capacity(4);
         let found_custom = Self::flatten_into_impl(
             obj,
             &mut traversal,
