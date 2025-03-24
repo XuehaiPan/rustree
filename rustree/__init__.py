@@ -28,9 +28,23 @@ from rustree.accessors import (
     SequenceEntry,
     StructSequenceEntry,
 )
-from rustree.ops import tree_is_leaf
+from rustree.ops import (
+    MAX_RECURSION_DEPTH,
+    NONE_IS_LEAF,
+    NONE_IS_NODE,
+    tree_flatten,
+    tree_is_leaf,
+    tree_leaves,
+    tree_structure,
+)
 from rustree.typing import (
+    CustomTreeNode,
+    FlattenFunc,
+    PyTree,
     PyTreeKind,
+    PyTreeSpec,
+    PyTreeTypeVar,
+    UnflattenFunc,
     is_namedtuple,
     is_namedtuple_class,
     is_namedtuple_instance,
@@ -44,9 +58,21 @@ from rustree.typing import (
 
 __all__ = [
     # Tree operations
+    'MAX_RECURSION_DEPTH',
+    'NONE_IS_NODE',
+    'NONE_IS_LEAF',
+    'tree_flatten',
+    'tree_leaves',
+    'tree_structure',
     'tree_is_leaf',
     # Typing
+    'PyTreeSpec',
     'PyTreeKind',
+    'PyTree',
+    'PyTreeTypeVar',
+    'CustomTreeNode',
+    'FlattenFunc',
+    'UnflattenFunc',
     'is_namedtuple',
     'is_namedtuple_class',
     'is_namedtuple_instance',
