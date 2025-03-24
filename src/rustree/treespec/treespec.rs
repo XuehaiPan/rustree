@@ -20,18 +20,41 @@ use std::sync::Arc;
 use crate::rustree::pytypes::{get_defaultdict, get_deque, get_ordereddict};
 use crate::rustree::registry::{PyTreeKind, PyTreeTypeRegistration};
 
-struct Node {
-    kind: PyTreeKind,
-    arity: usize,
-    node_data: Option<Py<PyAny>>,
-    node_entries: Option<Py<PyTuple>>,
-    custom: Option<Arc<PyTreeTypeRegistration>>,
-    num_leaves: usize,
-    num_nodes: usize,
-    original_keys: Option<Py<PyList>>,
+pub struct Node {
+    pub kind: PyTreeKind,
+    pub arity: usize,
+    pub node_data: Option<Py<PyAny>>,
+    pub node_entries: Option<Py<PyTuple>>,
+    pub custom: Option<Arc<PyTreeTypeRegistration>>,
+    pub num_leaves: usize,
+    pub num_nodes: usize,
+    pub original_keys: Option<Py<PyAny>>,
 }
 
 impl Node {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        kind: PyTreeKind,
+        arity: usize,
+        node_data: Option<Py<PyAny>>,
+        node_entries: Option<Py<PyTuple>>,
+        custom: Option<Arc<PyTreeTypeRegistration>>,
+        num_leaves: usize,
+        num_nodes: usize,
+        original_keys: Option<Py<PyAny>>,
+    ) -> Self {
+        Node {
+            kind,
+            arity,
+            node_data,
+            node_entries,
+            custom,
+            num_leaves,
+            num_nodes,
+            original_keys,
+        }
+    }
+
     fn get_type(&self, py: Python) -> Py<PyAny> {
         match self.kind {
             PyTreeKind::Custom => self
@@ -57,11 +80,27 @@ impl Node {
     }
 }
 
+impl Default for Node {
+    fn default() -> Self {
+        Self::new(PyTreeKind::Leaf, 0, None, None, None, 0, 0, None)
+    }
+}
+
 #[pyclass(module = "rustree")]
 pub struct PyTreeSpec {
     traversal: Vec<Node>,
     none_is_leaf: bool,
     namespace: String,
+}
+
+impl PyTreeSpec {
+    pub fn new(traversal: Vec<Node>, none_is_leaf: bool, namespace: String) -> Self {
+        PyTreeSpec {
+            traversal,
+            none_is_leaf,
+            namespace,
+        }
+    }
 }
 
 #[pymethods]
