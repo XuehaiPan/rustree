@@ -36,8 +36,13 @@ fn build_extension(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rustree::is_dict_insertion_ordered, m)?)?;
     m.add_function(wrap_pyfunction!(rustree::set_dict_insertion_ordered, m)?)?;
 
+    m.add(
+        "MAX_RECURSION_DEPTH",
+        rustree::treespec::MAX_RECURSION_DEPTH,
+    )?;
     m.add_class::<rustree::treespec::PyTreeSpec>()?;
-    m.add_function(wrap_pyfunction!(rustree::treespec::is_leaf, m)?)?;
+    m.add_function(wrap_pyfunction!(rustree::treespec::flatten::is_leaf, m)?)?;
+    m.add_function(wrap_pyfunction!(rustree::treespec::flatten::flatten, m)?)?;
 
     rustree::get_rust_module(m.py(), Some(m.clone().unbind()));
     Ok(())

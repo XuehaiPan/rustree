@@ -153,39 +153,45 @@ impl PyTreeTypeRegistry {
     #[inline]
     fn lookup_impl(
         &'static self,
-        cls: &Bound<'_, PyType>,
+        obj: &Bound<'_, PyAny>,
         namespace: &str,
-    ) -> Option<&'static Arc<PyTreeTypeRegistration>> {
+    ) -> (PyTreeKind, Option<Arc<PyTreeTypeRegistration>>) {
+        let cls = &obj.get_type();
         if !namespace.is_empty() {
             if let Some(registration) = self
                 .named_registrations
                 .get(&(String::from(namespace), cls.clone().unbind().into()))
             {
-                return Some(registration);
+                return (registration.kind, Some(registration.clone()));
             }
         }
-        self.registrations.get(&cls.clone().unbind().into())
+        if let Some(registration) = self.registrations.get(&cls.clone().unbind().into()) {
+            (registration.kind, Some(registration.clone()))
+        } else {
+            (PyTreeKind::Leaf, None)
+        }
     }
 
     #[inline]
     pub fn lookup(
-        cls: &Bound<'_, PyType>,
+        obj: &Bound<'_, PyAny>,
         none_is_leaf: Option<bool>,
         namespace: Option<&str>,
-    ) -> Option<&'static Arc<PyTreeTypeRegistration>> {
-        PyTreeTypeRegistry::get_singleton(cls.py(), none_is_leaf.unwrap_or(false))
-            .lookup_impl(cls, namespace.unwrap_or(""))
+    ) -> (PyTreeKind, Option<Arc<PyTreeTypeRegistration>>) {
+        PyTreeTypeRegistry::get_singleton(obj.py(), none_is_leaf.unwrap_or(false))
+            .lookup_impl(obj, namespace.unwrap_or(""))
     }
 
     fn register_impl<'py>(
         &'static mut self,
-        cls: &Bound<'py, PyType>,
+        obj: &Bound<'py, PyAny>,
         flatten_func: &Bound<'py, PyAny>,
         unflatten_func: &Bound<'py, PyAny>,
         path_entry_type: &Bound<'py, PyType>,
         namespace: &str,
     ) -> PyResult<()> {
-        let py = cls.py();
+        let py = obj.py();
+        let cls = &obj.get_type();
         let key = IdHashedPy(cls.clone().unbind());
         if self.builtin_types.contains(&key) {
             return Err(PyValueError::new_err(std::format!(
