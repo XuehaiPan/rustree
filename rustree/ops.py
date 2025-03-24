@@ -22,7 +22,7 @@ import rustree._rs as _rs
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
     from rustree.typing import PyTree, PyTreeSpec, T
 
@@ -32,6 +32,7 @@ __all__ = [
     'NONE_IS_NODE',
     'NONE_IS_LEAF',
     'tree_flatten',
+    'tree_unflatten',
     'tree_leaves',
     'tree_structure',
     'tree_is_leaf',
@@ -117,6 +118,28 @@ def tree_flatten(
         second element is a treespec representing the structure of the pytree.
     """
     return _rs.flatten(tree, is_leaf, none_is_leaf, namespace)
+
+
+def tree_unflatten(treespec: PyTreeSpec, leaves: Iterable[T]) -> PyTree[T]:
+    """Reconstruct a pytree from the treespec and the leaves.
+
+    The inverse of :func:`tree_flatten`.
+
+    >>> tree = {'b': (2, [3, 4]), 'a': 1, 'c': None, 'd': 5}
+    >>> leaves, treespec = tree_flatten(tree)
+    >>> tree == tree_unflatten(treespec, leaves)
+    True
+
+    Args:
+        treespec (PyTreeSpec): The treespec to reconstruct.
+        leaves (iterable): The list of leaves to use for reconstruction. The list must match the
+            number of leaves of the treespec.
+
+    Returns:
+        The reconstructed pytree, containing the ``leaves`` placed in the structure described by
+        ``treespec``.
+    """
+    return treespec.unflatten(leaves)
 
 
 def tree_leaves(

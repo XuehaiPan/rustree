@@ -17,7 +17,7 @@
 
 import builtins
 import enum
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterable
 
 from rustree.typing import (
     FlattenFunc,
@@ -76,6 +76,7 @@ class PyTreeSpec:
     namespace: str
     type: builtins.type | None
     kind: PyTreeKind
+    def unflatten(self, leaves: Iterable[T], /) -> PyTree[T]: ...
 
 def register_node(
     cls: type[Collection[T]],
