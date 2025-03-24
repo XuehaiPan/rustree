@@ -13,8 +13,10 @@
 // limitations under the License.
 // =============================================================================
 
-mod flatten;
+pub mod flatten;
+
+#[allow(clippy::module_inception)]
 mod treespec;
 
-pub use flatten::is_leaf;
+pub use flatten::MAX_RECURSION_DEPTH;
 pub use treespec::PyTreeSpec;
