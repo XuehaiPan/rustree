@@ -16,34 +16,39 @@
 use pyo3::ffi;
 use pyo3::prelude::*;
 
-mod rustree;
+mod pytypes;
+mod registry;
+mod treespec;
 
 #[pymodule]
 #[pyo3(name = "_rs")]
 fn build_extension(m: &Bound<PyModule>) -> PyResult<()> {
     m.add("Py_TPFLAGS_BASETYPE", ffi::Py_TPFLAGS_BASETYPE)?;
-    m.add_class::<rustree::PyTreeKind>()?;
-    m.add_function(wrap_pyfunction!(rustree::is_namedtuple, m)?)?;
-    m.add_function(wrap_pyfunction!(rustree::is_namedtuple_instance, m)?)?;
-    m.add_function(wrap_pyfunction!(rustree::is_namedtuple_class, m)?)?;
-    m.add_function(wrap_pyfunction!(rustree::namedtuple_fields, m)?)?;
-    m.add_function(wrap_pyfunction!(rustree::is_structseq, m)?)?;
-    m.add_function(wrap_pyfunction!(rustree::is_structseq_instance, m)?)?;
-    m.add_function(wrap_pyfunction!(rustree::is_structseq_class, m)?)?;
-    m.add_function(wrap_pyfunction!(rustree::structseq_fields, m)?)?;
-    m.add_function(wrap_pyfunction!(rustree::register_node, m)?)?;
-    m.add_function(wrap_pyfunction!(rustree::unregister_node, m)?)?;
-    m.add_function(wrap_pyfunction!(rustree::is_dict_insertion_ordered, m)?)?;
-    m.add_function(wrap_pyfunction!(rustree::set_dict_insertion_ordered, m)?)?;
+    m.add_class::<crate::registry::PyTreeKind>()?;
+    m.add_function(wrap_pyfunction!(crate::pytypes::is_namedtuple, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::pytypes::is_namedtuple_instance, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::pytypes::is_namedtuple_class, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::pytypes::namedtuple_fields, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::pytypes::is_structseq, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::pytypes::is_structseq_instance, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::pytypes::is_structseq_class, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::pytypes::structseq_fields, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::registry::register_node, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::registry::unregister_node, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::registry::is_dict_insertion_ordered,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::registry::set_dict_insertion_ordered,
+        m
+    )?)?;
 
-    m.add(
-        "MAX_RECURSION_DEPTH",
-        rustree::treespec::MAX_RECURSION_DEPTH,
-    )?;
-    m.add_class::<rustree::treespec::PyTreeSpec>()?;
-    m.add_function(wrap_pyfunction!(rustree::treespec::flatten::is_leaf, m)?)?;
-    m.add_function(wrap_pyfunction!(rustree::treespec::flatten::flatten, m)?)?;
+    m.add("MAX_RECURSION_DEPTH", crate::treespec::MAX_RECURSION_DEPTH)?;
+    m.add_class::<crate::treespec::PyTreeSpec>()?;
+    m.add_function(wrap_pyfunction!(crate::treespec::is_leaf, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::treespec::flatten, m)?)?;
 
-    rustree::get_rust_module(m.py(), Some(m.clone().unbind()));
+    crate::pytypes::get_rust_module(m.py(), Some(m.clone().unbind()));
     Ok(())
 }
