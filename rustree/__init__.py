@@ -36,6 +36,7 @@ from rustree.ops import (
     tree_is_leaf,
     tree_leaves,
     tree_structure,
+    tree_unflatten,
 )
 from rustree.typing import (
     CustomTreeNode,
@@ -62,6 +63,7 @@ __all__ = [
     'NONE_IS_NODE',
     'NONE_IS_LEAF',
     'tree_flatten',
+    'tree_unflatten',
     'tree_leaves',
     'tree_structure',
     'tree_is_leaf',
