@@ -13,8 +13,8 @@
 // limitations under the License.
 // =============================================================================
 
-use crate::rustree::pytypes::{get_defaultdict, get_deque, get_ordereddict};
-use crate::rustree::pytypes::{is_namedtuple_class, is_structseq_class};
+use crate::pytypes::{get_defaultdict, get_deque, get_ordereddict};
+use crate::pytypes::{is_namedtuple_class, is_structseq_class};
 use once_cell::sync::OnceCell;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -71,12 +71,12 @@ impl<T> std::hash::Hash for IdHashedPy<T> {
 
 static mut DICT_INSERTION_ORDERED_NAMESPACES: OnceCell<HashSet<String>> = OnceCell::new();
 
-pub struct PyTreeTypeRegistration {
-    pub kind: PyTreeKind,
-    pub r#type: Py<PyType>,
-    pub flatten_func: Option<Py<PyAny>>,
-    pub unflatten_func: Option<Py<PyAny>>,
-    pub path_entry_type: Option<Py<PyType>>,
+pub(crate) struct PyTreeTypeRegistration {
+    pub(crate) kind: PyTreeKind,
+    pub(crate) r#type: Py<PyType>,
+    pub(crate) flatten_func: Option<Py<PyAny>>,
+    pub(crate) unflatten_func: Option<Py<PyAny>>,
+    pub(crate) path_entry_type: Option<Py<PyType>>,
 }
 
 pub struct PyTreeTypeRegistry {
@@ -135,10 +135,10 @@ impl PyTreeTypeRegistry {
         };
 
         #[allow(static_mut_refs)]
-        unsafe {
-            REGISTRY_NONE_IS_NODE.get_or_init(py, init_fn(false));
-            REGISTRY_NONE_IS_LEAF.get_or_init(py, init_fn(true));
-        }
+        match none_is_leaf {
+            false => unsafe { REGISTRY_NONE_IS_NODE.get_or_init(py, init_fn(false)) },
+            true => unsafe { REGISTRY_NONE_IS_LEAF.get_or_init(py, init_fn(true)) },
+        };
 
         #[allow(static_mut_refs)]
         match none_is_leaf {
