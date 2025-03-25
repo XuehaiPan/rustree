@@ -453,35 +453,41 @@ impl PyTreeSpec {
         for node in self.traversal.iter() {
             if node.kind == PyTreeKind::Leaf {
                 match it.next() {
-                    Some(leaf) => {
-                        agenda.push(leaf.unwrap().clone().unbind());
+                    Some(Ok(leaf)) => {
+                        agenda.push(leaf.clone().unbind());
                         num_leaves += 1;
                     }
+                    Some(Err(e)) => {
+                        return Err(e);
+                    }
                     None => {
-                        panic!("found {}", num_leaves);
+                        return Err(PyValueError::new_err(format!(
+                            "Too few leaves for PyTreeSpec; expected: {}, got: {}.",
+                            Self::num_leaves(&self).unwrap(),
+                            num_leaves,
+                        )));
                     }
                 }
             } else {
                 let size = agenda.len();
-                let mut children = Vec::with_capacity(node.arity);
-                for _ in 0..node.arity {
-                    match agenda.pop() {
-                        Some(child) => {
-                            children.push(child);
-                        }
-                        None => {
-                            panic!("found {}", num_leaves);
-                        }
-                    };
-                }
-                children.reverse();
-                let obj = node.make_node(py, &children)?;
-                agenda.truncate(size - node.arity);
+                let obj = node.make_node(py, &agenda.split_off(size - node.arity))?;
                 agenda.push(obj);
             }
         }
+        match it.next() {
+            Some(Ok(_)) => {
+                return Err(PyValueError::new_err(format!(
+                    "Too many leaves for PyTreeSpec; expected: {}.",
+                    Self::num_leaves(&self).unwrap(),
+                )));
+            }
+            Some(Err(e)) => {
+                return Err(e);
+            }
+            None => {}
+        }
         if agenda.len() != 1 {
-            panic!("found {}", num_leaves);
+            panic!("PyTreeSpec traversal did not yield a singleton.");
         }
         Ok(agenda.pop().unwrap())
     }
