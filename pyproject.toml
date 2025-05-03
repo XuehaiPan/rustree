@@ -119,7 +119,7 @@ ignore-words = "docs/source/spelling_wordlist.txt"
 target-version = "py38"
 line-length = 100
 output-format = "full"
-src = ["retree", "tests"]
+src = ["rustree", "tests"]
 
 [tool.ruff.format]
 quote-style = "single"
@@ -195,9 +195,6 @@ typing-modules = ["rustree.typing"]
     "D",       # pydocstyle
     "ANN",     # flake8-annotations
 ]
-"benchmark.py" = [
-    "D",       # pydocstyle
-]
 "tests/**/*.py" = [
     "D",       # pydocstyle
     "ANN",     # flake8-annotations
@@ -238,4 +235,4 @@ ban-relative-imports = "all"
 
 [tool.pytest.ini_options]
 verbosity_assertions = 3
-filterwarnings = ["error", "always"]
+filterwarnings = ["always", "error"]

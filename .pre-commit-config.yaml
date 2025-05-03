@@ -15,18 +15,17 @@ repos:
       - id: destroyed-symlinks
       - id: trailing-whitespace
       - id: end-of-file-fixer
-      - id: check-yaml
-      - id: check-toml
-      - id: check-ast
-        fail_fast: true
       - id: check-added-large-files
       - id: check-merge-conflict
         fail_fast: true
       - id: check-executables-have-shebangs
       - id: check-shebang-scripts-are-executable
       - id: detect-private-key
+      - id: check-yaml
+      - id: check-toml
+      - id: check-ast
+        fail_fast: true
       - id: debug-statements
-      - id: double-quote-string-fixer
   - repo: local
     hooks:
       - id: rustfmt
@@ -36,11 +35,12 @@ repos:
         types: [rust]
         pass_filenames: false
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.11.0
+    rev: v0.11.8
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
+        args: [--exit-non-zero-on-format]
   - repo: https://github.com/codespell-project/codespell
     rev: v2.4.1
     hooks:
@@ -52,8 +52,7 @@ repos:
       - id: mypy
         exclude: |
           (?x)(
-            ^tests/|
-            ^setup.py$
+            ^tests/
           )
   - repo: local
     hooks:
@@ -65,6 +64,5 @@ repos:
         require_serial: true
         exclude: |
           (?x)(
-            ^tests/|
-            ^setup.py$
+            ^tests/
           )

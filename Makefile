@@ -27,7 +27,7 @@ GOPATH         ?= $(HOME)/go
 GOBIN          ?= $(GOPATH)/bin
 PATH           := $(PATH):$(GOBIN)
 PYTHON         ?= $(shell command -v python3 || command -v python)
-PYTEST         ?= $(PYTHON) -X dev -m pytest
+PYTEST         ?= $(PYTHON) -X dev -m pytest -Walways
 PYTESTOPTS     ?=
 
 .PHONY: default
@@ -104,6 +104,7 @@ pytest-install:
 	$(call check_pip_install,pytest)
 	$(call check_pip_install,pytest-cov)
 	$(call check_pip_install,pytest-xdist)
+	$(call check_pip_install,covdefaults)
 
 .PHONY: test-install
 test-install: pytest-install
@@ -131,8 +132,8 @@ addlicense-install: go-install
 .PHONY: pytest test
 pytest test: pytest-install
 	$(PYTEST) --version
-	cd tests && $(PYTHON) -X dev -W 'always' -W 'error' -c 'import $(PROJECT_NAME)' && \
-	$(PYTHON) -X dev -W 'always' -W 'error' -c 'import $(PROJECT_NAME)._C; print(f"GLIBCXX_USE_CXX11_ABI={$(PROJECT_NAME)._C.GLIBCXX_USE_CXX11_ABI}")' && \
+	cd tests && $(PYTHON) -X dev -Walways -Werror -c 'import $(PROJECT_NAME)' && \
+	$(PYTHON) -X dev -Walways -Werror -c 'import $(PROJECT_NAME)._C; print(f"GLIBCXX_USE_CXX11_ABI={$(PROJECT_NAME)._C.GLIBCXX_USE_CXX11_ABI}")' && \
 	$(PYTEST) --verbose --color=yes --durations=10 --showlocals \
 		--cov="$(PROJECT_NAME)" --cov-config=.coveragerc --cov-report=xml --cov-report=term-missing \
 		$(PYTESTOPTS) .
@@ -163,7 +164,7 @@ ruff-fix: ruff-install
 .PHONY: pylint
 pylint: pylint-install
 	$(PYTHON) -m pylint --version
-	$(PYTHON) -m pylint $(PROJECT_PATH)
+	$(PYTHON) -m pylint $(PROJECT_PATH) setup.py
 
 .PHONY: mypy
 mypy: mypy-install
