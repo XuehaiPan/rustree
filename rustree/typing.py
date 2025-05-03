@@ -21,24 +21,27 @@ import functools
 import platform
 import sys
 import types
-from collections.abc import Hashable
+from builtins import dict as Dict  # noqa: N812
+from builtins import list as List  # noqa: N812
+from builtins import tuple as Tuple  # noqa: N812
+from collections import OrderedDict
+from collections import defaultdict as DefaultDict  # noqa: N812
+from collections import deque as Deque  # noqa: N812
+from collections.abc import (
+    Collection,
+    Hashable,
+    Iterable,
+    Sequence,
+)
 from typing import (
     Any,
     Callable,
     ClassVar,
-    Collection,
-    DefaultDict,
-    Deque,
-    Dict,
     Final,
-    Iterable,
-    List,
     Optional,
-    OrderedDict,
     Protocol,
-    Sequence,
-    Tuple,
     TypeVar,
+    final,
     runtime_checkable,
 )
 from typing_extensions import (
@@ -51,7 +54,7 @@ from typing_extensions import (
 
 import rustree._rs as _rs
 from rustree._rs import PyTreeKind
-from rustree.accessor import (
+from rustree.accessors import (
     AutoEntry,
     DataclassEntry,
     FlattenedEntry,
@@ -100,13 +103,14 @@ __all__ = [
     'F',
     'Iterable',
     'Sequence',
-    'List',
     'Tuple',
-    'NamedTuple',
+    'List',
     'Dict',
+    'NamedTuple',
     'OrderedDict',
     'DefaultDict',
     'Deque',
+    'StructSequence',
 ]
 
 
@@ -245,13 +249,13 @@ class StructSequenceMeta(type):
         """Return whether the class is a PyStructSequence type.
 
         >>> import time
-        >>> issubclass(time.struct_time, structseq)
+        >>> issubclass(time.struct_time, StructSequence)
         True
         >>> class MyTuple(tuple):
         ...     n_fields = 2
         ...     n_sequence_fields = 2
         ...     n_unnamed_fields = 0
-        >>> issubclass(MyTuple, structseq)
+        >>> issubclass(MyTuple, StructSequence)
         False
         """
         return is_structseq_class(subclass)
@@ -260,9 +264,9 @@ class StructSequenceMeta(type):
         """Return whether the object is a PyStructSequence instance.
 
         >>> import sys
-        >>> isinstance(sys.float_info, structseq)
+        >>> isinstance(sys.float_info, StructSequence)
         True
-        >>> isinstance((1, 2), structseq)
+        >>> isinstance((1, 2), StructSequence)
         False
         """
         return is_structseq_instance(instance)
@@ -270,9 +274,10 @@ class StructSequenceMeta(type):
 
 # Reference: https://github.com/python/typeshed/blob/main/stdlib/_typeshed/__init__.pyi
 # This is an internal CPython type that is like, but subtly different from a NamedTuple.
-# `structseq` classes are unsubclassable, so are all decorated with `@final`.
+# `StructSequence` classes are unsubclassable, so are all decorated with `@final`.
 # pylint: disable-next=invalid-name,missing-class-docstring
-class structseq(Tuple[_T_co, ...], metaclass=StructSequenceMeta):  # type: ignore[misc] # noqa: N801
+@final
+class StructSequence(tuple[_T_co, ...], metaclass=StructSequenceMeta):  # type: ignore[misc]
     """A generic type stub for CPython's ``PyStructSequence`` type."""
 
     __slots__: ClassVar[tuple[()]] = ()
@@ -283,12 +288,15 @@ class structseq(Tuple[_T_co, ...], metaclass=StructSequenceMeta):  # type: ignor
 
     def __init_subclass__(cls, /) -> Never:
         """Prohibit subclassing."""
-        raise TypeError("type 'structseq' is not an acceptable base type")
+        raise TypeError("type 'StructSequence' is not an acceptable base type")
 
     # pylint: disable-next=unused-argument,redefined-builtin
     def __new__(cls, /, sequence: Iterable[_T_co], dict: dict[str, Any] = ...) -> Self:
+        """Create a new :class:`StructSequence` instance."""
         raise NotImplementedError
 
+
+structseq: TypeAlias = StructSequence  # noqa: PYI042
 
 del StructSequenceMeta
 

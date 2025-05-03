@@ -20,30 +20,15 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
-import functools
 import inspect
 import sys
 from collections import OrderedDict, defaultdict, deque, namedtuple
 from operator import itemgetter, methodcaller
 from threading import Lock
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    ClassVar,
-    Collection,
-    Generator,
-    Generic,
-    Iterable,
-    NamedTuple,
-    Type,
-    TypeVar,
-    overload,
-)
-from typing_extensions import TypeAlias  # Python 3.10+
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, NamedTuple, TypeVar, overload
 
 import rustree._rs as _rs
-from rustree.accessor import (
+from rustree.accessors import (
     AutoEntry,
     MappingEntry,
     NamedTupleEntry,
@@ -51,21 +36,18 @@ from rustree.accessor import (
     SequenceEntry,
     StructSequenceEntry,
 )
-from rustree.typing import (
-    CustomTreeNode,
-    PyTreeKind,
-    T,
-    is_namedtuple_class,
-    is_structseq_class,
-    structseq,
-)
+from rustree.typing import PyTreeKind, StructSequence, T, is_namedtuple_class, is_structseq_class
 from rustree.utils import safe_zip, total_order_sorted, unzip2
 
 
 if TYPE_CHECKING:
     import builtins
+    from collections.abc import Collection, Generator, Iterable
 
-    from rustree.typing import KT, VT, FlattenFunc, UnflattenFunc
+    from rustree.typing import KT, VT, CustomTreeNode, FlattenFunc, UnflattenFunc
+
+    # pylint: disable-next=invalid-name
+    CustomTreeNodeType = TypeVar('CustomTreeNodeType', bound=type[CustomTreeNode])
 
 
 __all__ = [
@@ -175,7 +157,7 @@ def pytree_node_registry_get(  # noqa: C901
             type=<class 'NoneType'>,
             flatten_func=<function ...>,
             unflatten_func=<function ...>,
-            path_entry_type=<class 'rustree.accessor.PyTreeEntry'>,
+            path_entry_type=<class 'rustree.PyTreeEntry'>,
             kind=<PyTreeKind.NONE: 2>,
             namespace=''
         ),
@@ -183,7 +165,7 @@ def pytree_node_registry_get(  # noqa: C901
             type=<class 'tuple'>,
             flatten_func=<function ...>,
             unflatten_func=<function ...>,
-            path_entry_type=<class 'rustree.accessor.SequenceEntry'>,
+            path_entry_type=<class 'rustree.SequenceEntry'>,
             kind=<PyTreeKind.TUPLE: 3>,
             namespace=''
         ),
@@ -191,7 +173,7 @@ def pytree_node_registry_get(  # noqa: C901
             type=<class 'list'>,
             flatten_func=<function ...>,
             unflatten_func=<function ...>,
-            path_entry_type=<class 'rustree.accessor.SequenceEntry'>,
+            path_entry_type=<class 'rustree.SequenceEntry'>,
             kind=<PyTreeKind.LIST: 4>,
             namespace=''
         ),
@@ -202,7 +184,7 @@ def pytree_node_registry_get(  # noqa: C901
         type=<class 'collections.defaultdict'>,
         flatten_func=<function ...>,
         unflatten_func=<function ...>,
-        path_entry_type=<class 'rustree.accessor.MappingEntry'>,
+        path_entry_type=<class 'rustree.MappingEntry'>,
         kind=<PyTreeKind.DEFAULTDICT: 8>,
         namespace=''
     )
@@ -260,7 +242,7 @@ def pytree_node_registry_get(  # noqa: C901
     if handler is not None:
         return handler
     if is_structseq_class(cls):
-        return _NODETYPE_REGISTRY.get(structseq)
+        return _NODETYPE_REGISTRY.get(StructSequence)
     if is_namedtuple_class(cls):
         return _NODETYPE_REGISTRY.get(namedtuple)  # type: ignore[call-overload] # noqa: PYI024
     return None
@@ -430,9 +412,6 @@ def register_pytree_node(
 del pytree_node_registry_get, _add_get
 
 
-CustomTreeNodeType: TypeAlias = Type[CustomTreeNode[T]]
-
-
 @overload
 def register_pytree_node_class(
     cls: str | None = None,
@@ -526,11 +505,7 @@ def register_pytree_node_class(  # noqa: C901
             raise ValueError('Cannot specify `namespace` when the first argument is a string.')
         if cls == '':
             raise ValueError('The namespace cannot be an empty string.')
-        return functools.partial(
-            register_pytree_node_class,
-            path_entry_type=path_entry_type,
-            namespace=cls,
-        )  # type: ignore[return-value]
+        cls, namespace = None, cls
 
     if namespace is None:
         raise ValueError('Must specify `namespace` when the first argument is a class.')
@@ -540,17 +515,23 @@ def register_pytree_node_class(  # noqa: C901
         raise ValueError('The namespace cannot be an empty string.')
 
     if cls is None:
-        return functools.partial(
-            register_pytree_node_class,
-            path_entry_type=path_entry_type,
-            namespace=namespace,
-        )  # type: ignore[return-value]
+
+        def decorator(cls: CustomTreeNodeType, /) -> CustomTreeNodeType:
+            return register_pytree_node_class(
+                cls,
+                path_entry_type=path_entry_type,
+                namespace=namespace,
+            )
+
+        return decorator
+
     if not inspect.isclass(cls):
         raise TypeError(f'Expected a class, got {cls!r}.')
     if path_entry_type is None:
         path_entry_type = getattr(cls, 'TREE_PATH_ENTRY_TYPE', AutoEntry)
     if not (inspect.isclass(path_entry_type) and issubclass(path_entry_type, PyTreeEntry)):
         raise TypeError(f'Expected a subclass of PyTreeEntry, got {path_entry_type!r}.')
+
     register_pytree_node(
         cls,
         methodcaller('tree_flatten'),
@@ -791,11 +772,15 @@ def _namedtuple_unflatten(cls: type[NamedTuple[T]], children: Iterable[T], /) ->
     return cls(*children)  # type: ignore[call-overload]
 
 
-def _structseq_flatten(seq: structseq[T], /) -> tuple[tuple[T, ...], type[structseq[T]]]:
+def _structseq_flatten(seq: StructSequence[T], /) -> tuple[tuple[T, ...], type[StructSequence[T]]]:
     return seq, type(seq)
 
 
-def _structseq_unflatten(cls: type[structseq[T]], children: Iterable[T], /) -> structseq[T]:
+def _structseq_unflatten(
+    cls: type[StructSequence[T]],
+    children: Iterable[T],
+    /,
+) -> StructSequence[T]:
     return cls(children)
 
 
@@ -856,8 +841,8 @@ _NODETYPE_REGISTRY: dict[type | tuple[str, type], PyTreeNodeRegistryEntry] = {
         path_entry_type=SequenceEntry,
         kind=PyTreeKind.DEQUE,
     ),
-    structseq: PyTreeNodeRegistryEntry(
-        structseq,
+    StructSequence: PyTreeNodeRegistryEntry(
+        StructSequence,
         _structseq_flatten,
         _structseq_unflatten,
         path_entry_type=StructSequenceEntry,

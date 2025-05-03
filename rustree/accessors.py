@@ -18,19 +18,8 @@ from __future__ import annotations
 
 import dataclasses
 import sys
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    ClassVar,
-    Generic,
-    Iterable,
-    Literal,
-    Mapping,
-    Sequence,
-    Tuple,
-    TypeVar,
-    overload,
-)
+from collections.abc import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar, overload
 from typing_extensions import Self  # Python 3.11+
 
 import rustree._rs as _rs
@@ -40,7 +29,7 @@ from rustree._rs import PyTreeKind
 if TYPE_CHECKING:
     import builtins
 
-    from rustree.typing import NamedTuple, structseq
+    from rustree.typing import NamedTuple, StructSequence
 
 
 __all__ = [
@@ -313,7 +302,7 @@ class StructSequenceEntry(SequenceEntry[_T]):
     __slots__: ClassVar[tuple[()]] = ()
 
     entry: int
-    type: builtins.type[structseq[_T]]
+    type: builtins.type[StructSequence[_T]]
     kind: Literal[PyTreeKind.STRUCTSEQUENCE]
 
     @property
@@ -371,7 +360,7 @@ class DataclassEntry(GetAttrEntry):
         return f'{self.__class__.__name__}(field={self.field!r}, type={self.type!r})'
 
 
-class PyTreeAccessor(Tuple[PyTreeEntry, ...]):
+class PyTreeAccessor(tuple[PyTreeEntry, ...]):
     """A path class for PyTrees."""
 
     __slots__: ClassVar[tuple[()]] = ()
@@ -444,14 +433,11 @@ class PyTreeAccessor(Tuple[PyTreeEntry, ...]):
 
 
 # These classes are used internally in the Rust side for accessor APIs
-setattr(_rs, 'PyTreeEntry', PyTreeEntry)  # noqa: B010
-setattr(_rs, 'GetItemEntry', GetItemEntry)  # noqa: B010
-setattr(_rs, 'GetAttrEntry', GetAttrEntry)  # noqa: B010
-setattr(_rs, 'FlattenedEntry', FlattenedEntry)  # noqa: B010
-setattr(_rs, 'AutoEntry', AutoEntry)  # noqa: B010
-setattr(_rs, 'SequenceEntry', SequenceEntry)  # noqa: B010
-setattr(_rs, 'MappingEntry', MappingEntry)  # noqa: B010
-setattr(_rs, 'NamedTupleEntry', NamedTupleEntry)  # noqa: B010
-setattr(_rs, 'StructSequenceEntry', StructSequenceEntry)  # noqa: B010
-setattr(_rs, 'DataclassEntry', DataclassEntry)  # noqa: B010
-setattr(_rs, 'PyTreeAccessor', PyTreeAccessor)  # noqa: B010
+_name, _cls = '', object
+for _name in __all__:
+    _cls = globals()[_name]
+    if not isinstance(_cls, type):  # pragma: no cover
+        raise TypeError(f'Expected a class, got {_cls!r}.')
+    _cls.__module__ = 'optree'
+    setattr(_rs, _name, _cls)
+del _name, _cls
