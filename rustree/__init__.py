@@ -14,8 +14,8 @@
 # ==============================================================================
 """RusTree: Optimized PyTree Utilities written in Rust."""
 
-from rustree import accessor, typing
-from rustree.accessor import (
+from rustree import accessors, typing
+from rustree.accessors import (
     AutoEntry,
     DataclassEntry,
     FlattenedEntry,

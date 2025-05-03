@@ -8,7 +8,7 @@ build-backend = "maturin"
 name = "rustree"
 description = "Optimized PyTree Utilities written in Rust."
 readme = "README.md"
-requires-python = ">= 3.8"
+requires-python = ">= 3.9"
 authors = [
     { name = "RusTree Contributors" },
     { name = "Xuehai Pan", email = "XuehaiPan@pku.edu.cn" },
@@ -25,7 +25,6 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Rust",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -69,7 +68,7 @@ strip = true
 # Linter tools #################################################################
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.9"
 exclude = ['^tests/.*\.py$']
 pretty = true
 show_column_numbers = true
@@ -92,7 +91,7 @@ warn_unused_ignores = true
 no_site_packages = true
 
 [tool.pylint]
-main.py-version = "3.8"
+main.py-version = "3.9"
 main.extension-pkg-allow-list = ["rustree._rs"]
 main.ignore-paths = ["^_rs/$", "^tests/$"]
 basic.good-names = []
@@ -116,7 +115,7 @@ max-line-length = 500
 ignore-words = "docs/source/spelling_wordlist.txt"
 
 [tool.ruff]
-target-version = "py38"
+target-version = "py39"
 line-length = 100
 output-format = "full"
 src = ["rustree", "tests"]
