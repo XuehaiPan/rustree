@@ -30,8 +30,8 @@ build = "build.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.24", features = ["extension-module"] }
+pyo3 = { version = "0.25", features = ["extension-module"] }
 once_cell = "*"
 
 [build-dependencies]
-pyo3-build-config = { version = "0.24", features = ["resolve-config"] }
+pyo3-build-config = { version = "0.25", features = ["resolve-config"] }
