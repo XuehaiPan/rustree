@@ -12,11 +12,9 @@ insert_final_newline = true
 
 [*.py]
 indent_size = 4
-src_paths=rustree,tests
 
 [*.rs]
 indent_size = 4
-src_paths=src
 
 [*.{yaml,yml}]
 indent_size = 2
