@@ -39,8 +39,7 @@ install:
 
 .PHONY: install-editable install-e
 install-editable install-e:
-	$(PYTHON) -m pip install --upgrade pip
-	$(PYTHON) -m pip install --upgrade setuptools wheel
+	$(PYTHON) -m pip install --upgrade pip setuptools wheel
 	$(PYTHON) -m pip install --upgrade maturin
 	$(PYTHON) -m pip install -v --no-build-isolation --editable .
 
@@ -50,10 +49,9 @@ uninstall:
 
 .PHONY: build
 build:
-	$(PYTHON) -m pip install --upgrade pip
-	$(PYTHON) -m pip install --upgrade setuptools wheel build
+	$(PYTHON) -m pip install --upgrade pip setuptools wheel build
 	find $(PROJECT_PATH) -type f -name '*.so' -delete
-	find $(PROJECT_PATH) -type f -name '*.pxd' -delete
+	find $(PROJECT_PATH) -type f -name '*.pyd' -delete
 	rm -rf *.egg-info .eggs
 	$(PYTHON) -m build --verbose
 
@@ -133,9 +131,10 @@ addlicense-install: go-install
 pytest test: pytest-install
 	$(PYTEST) --version
 	cd tests && $(PYTHON) -X dev -Walways -Werror -c 'import $(PROJECT_NAME)' && \
-	$(PYTHON) -X dev -Walways -Werror -c 'import $(PROJECT_NAME)._C; print(f"GLIBCXX_USE_CXX11_ABI={$(PROJECT_NAME)._C.GLIBCXX_USE_CXX11_ABI}")' && \
+	$(PYTHON) -X dev -Walways -Werror -c \
+		'import rich, $(PROJECT_NAME)._rs; rich.inspect($(PROJECT_NAME)._rs, value=True, methods=True)' && \
 	$(PYTEST) --verbose --color=yes --durations=10 --showlocals \
-		--cov="$(PROJECT_NAME)" --cov-config=.coveragerc --cov-report=xml --cov-report=term-missing \
+		--cov="$(PROJECT_NAME)" --cov-report=term-missing \
 		$(PYTESTOPTS) .
 
 # Python Linters
@@ -202,8 +201,8 @@ addlicense: addlicense-install
 
 .PHONY: docstyle
 docstyle: docs-install
-	make -C docs clean || true
-	$(PYTHON) -m doc8 docs && make -C docs html SPHINXOPTS="-W"
+	$(MAKE) -C docs clean || true
+	$(PYTHON) -m doc8 docs && $(MAKE) -C docs html SPHINXOPTS="-W"
 
 .PHONY: docs
 docs: docs-install
@@ -211,12 +210,12 @@ docs: docs-install
 
 .PHONY: spelling
 spelling: docs-install
-	make -C docs clean || true
-	make -C docs spelling SPHINXOPTS="-W"
+	$(MAKE) -C docs clean || true
+	$(MAKE) -C docs spelling SPHINXOPTS="-W"
 
 .PHONY: clean-docs
 clean-docs:
-	make -C docs clean || true
+	$(MAKE) -C docs clean || true
 
 # Utility Functions
 
