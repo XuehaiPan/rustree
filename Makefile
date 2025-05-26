@@ -27,7 +27,7 @@ GOPATH         ?= $(HOME)/go
 GOBIN          ?= $(GOPATH)/bin
 PATH           := $(PATH):$(GOBIN)
 PYTHON         ?= $(shell command -v python3 || command -v python)
-PYTEST         ?= $(PYTHON) -X dev -m pytest
+PYTEST         ?= $(PYTHON) -X dev -m pytest -Walways
 PYTESTOPTS     ?=
 
 .PHONY: default
@@ -39,8 +39,7 @@ install:
 
 .PHONY: install-editable install-e
 install-editable install-e:
-	$(PYTHON) -m pip install --upgrade pip
-	$(PYTHON) -m pip install --upgrade setuptools wheel
+	$(PYTHON) -m pip install --upgrade pip setuptools wheel
 	$(PYTHON) -m pip install --upgrade maturin
 	$(PYTHON) -m pip install -v --no-build-isolation --editable .
 
@@ -50,10 +49,9 @@ uninstall:
 
 .PHONY: build
 build:
-	$(PYTHON) -m pip install --upgrade pip
-	$(PYTHON) -m pip install --upgrade setuptools wheel build
+	$(PYTHON) -m pip install --upgrade pip setuptools wheel build
 	find $(PROJECT_PATH) -type f -name '*.so' -delete
-	find $(PROJECT_PATH) -type f -name '*.pxd' -delete
+	find $(PROJECT_PATH) -type f -name '*.pyd' -delete
 	rm -rf *.egg-info .eggs
 	$(PYTHON) -m build --verbose
 
@@ -103,7 +101,8 @@ docs-install:
 pytest-install:
 	$(call check_pip_install,pytest)
 	$(call check_pip_install,pytest-cov)
-	$(call check_pip_install,pytest-xdist)
+	$(call check_pip_install,covdefaults)
+	$(call check_pip_install,rich)
 
 .PHONY: test-install
 test-install: pytest-install
@@ -131,10 +130,11 @@ addlicense-install: go-install
 .PHONY: pytest test
 pytest test: pytest-install
 	$(PYTEST) --version
-	cd tests && $(PYTHON) -X dev -W 'always' -W 'error' -c 'import $(PROJECT_NAME)' && \
-	$(PYTHON) -X dev -W 'always' -W 'error' -c 'import $(PROJECT_NAME)._C; print(f"GLIBCXX_USE_CXX11_ABI={$(PROJECT_NAME)._C.GLIBCXX_USE_CXX11_ABI}")' && \
+	cd tests && $(PYTHON) -X dev -Walways -Werror -c 'import $(PROJECT_NAME)' && \
+	$(PYTHON) -X dev -Walways -Werror -c \
+		'import rich, $(PROJECT_NAME)._rs; rich.inspect($(PROJECT_NAME)._rs, value=True, methods=True)' && \
 	$(PYTEST) --verbose --color=yes --durations=10 --showlocals \
-		--cov="$(PROJECT_NAME)" --cov-config=.coveragerc --cov-report=xml --cov-report=term-missing \
+		--cov="$(PROJECT_NAME)" --cov-report=term-missing \
 		$(PYTESTOPTS) .
 
 # Python Linters
@@ -163,7 +163,7 @@ ruff-fix: ruff-install
 .PHONY: pylint
 pylint: pylint-install
 	$(PYTHON) -m pylint --version
-	$(PYTHON) -m pylint $(PROJECT_PATH)
+	$(PYTHON) -m pylint $(PROJECT_PATH) setup.py
 
 .PHONY: mypy
 mypy: mypy-install
@@ -201,8 +201,8 @@ addlicense: addlicense-install
 
 .PHONY: docstyle
 docstyle: docs-install
-	make -C docs clean || true
-	$(PYTHON) -m doc8 docs && make -C docs html SPHINXOPTS="-W"
+	$(MAKE) -C docs clean || true
+	$(PYTHON) -m doc8 docs && $(MAKE) -C docs html SPHINXOPTS="-W"
 
 .PHONY: docs
 docs: docs-install
@@ -210,12 +210,12 @@ docs: docs-install
 
 .PHONY: spelling
 spelling: docs-install
-	make -C docs clean || true
-	make -C docs spelling SPHINXOPTS="-W"
+	$(MAKE) -C docs clean || true
+	$(MAKE) -C docs spelling SPHINXOPTS="-W"
 
 .PHONY: clean-docs
 clean-docs:
-	make -C docs clean || true
+	$(MAKE) -C docs clean || true
 
 # Utility Functions
 
@@ -232,7 +232,7 @@ format: pyfmt-install ruff-install addlicense-install
 
 .PHONY: clean-python
 clean-python:
-	find . -type f -name '*.py[cod]' -delete
+	find . -type f -name '*.py[co]' -delete
 	find . -depth -type d -name "__pycache__" -exec rm -r "{}" +
 	find . -depth -type d -name ".ruff_cache" -exec rm -r "{}" +
 	find . -depth -type d -name ".mypy_cache" -exec rm -r "{}" +
@@ -248,7 +248,7 @@ clean-rust:
 clean-build:
 	rm -rf build/ dist/
 	find $(PROJECT_PATH) -type f -name '*.so' -delete
-	find $(PROJECT_PATH) -type f -name '*.pxd' -delete
+	find $(PROJECT_PATH) -type f -name '*.pyd' -delete
 	rm -rf *.egg-info .eggs
 
 .PHONY: clean
