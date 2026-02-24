@@ -18,7 +18,7 @@ use crate::pytypes::{is_namedtuple_class, is_structseq_class};
 use once_cell::sync::OnceCell;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::sync::GILOnceCell;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::*;
 use std::collections::hash_map::Entry as HashMapEntry;
 use std::collections::{HashMap, HashSet};
@@ -69,6 +69,8 @@ impl<T> std::hash::Hash for IdHashedPy<T> {
     }
 }
 
+static mut REGISTRY_NONE_IS_NODE: PyOnceLock<PyTreeTypeRegistry> = PyOnceLock::new();
+static mut REGISTRY_NONE_IS_LEAF: PyOnceLock<PyTreeTypeRegistry> = PyOnceLock::new();
 static mut DICT_INSERTION_ORDERED_NAMESPACES: OnceCell<HashSet<String>> = OnceCell::new();
 
 pub(crate) struct PyTreeTypeRegistration {
@@ -459,7 +461,7 @@ impl PyTreeTypeRegistry {
 
 impl Drop for PyTreeTypeRegistry {
     fn drop(&mut self) {
-        Python::with_gil(|_py| {
+        Python::attach(|_py| {
             self.registrations.clear();
             self.named_registrations.clear();
             self.builtin_types.clear();
