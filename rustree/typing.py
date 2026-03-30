@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Typing utilities for RusTree."""
+"""Typing utilities for OpTree."""
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ from typing_extensions import (
 )
 from weakref import WeakKeyDictionary
 
-import rustree._rs as _rs
+from rustree import _rs
 from rustree._rs import PyTreeKind, PyTreeSpec
 from rustree.accessors import (
     AutoEntry,
@@ -82,6 +82,7 @@ from rustree.accessors import (
 
 __all__ = [
     'PyTreeSpec',
+    'PyTreeDef',
     'PyTreeKind',
     'PyTree',
     'PyTreeTypeVar',
@@ -128,6 +129,8 @@ __all__ = [
     'StructSequence',
 ]
 
+
+PyTreeDef: TypeAlias = PyTreeSpec  # alias
 
 T = TypeVar('T')
 S = TypeVar('S')
@@ -372,7 +375,7 @@ class UnflattenFunc(Protocol[T]):  # pylint: disable=too-few-public-methods
 
 
 def _override_with_(
-    rust_implementation: Callable[P, T],
+    cxx_implementation: Callable[P, T],
     /,
 ) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """Decorator to override the Python implementation with the C++ implementation.
@@ -391,9 +394,9 @@ def _override_with_(
     def wrapper(python_implementation: Callable[P, T], /) -> Callable[P, T]:
         @functools.wraps(python_implementation)
         def wrapped(*args: P.args, **kwargs: P.kwargs) -> T:
-            return rust_implementation(*args, **kwargs)
+            return cxx_implementation(*args, **kwargs)
 
-        wrapped.__rust_implementation__ = rust_implementation  # type: ignore[attr-defined]
+        wrapped.__rust_implementation__ = cxx_implementation  # type: ignore[attr-defined]
         wrapped.__python_implementation__ = python_implementation  # type: ignore[attr-defined]
 
         return wrapped

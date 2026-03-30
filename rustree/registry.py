@@ -28,7 +28,7 @@ from operator import itemgetter, methodcaller
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, NamedTuple, TypeVar, overload
 
-import rustree._rs as _rs
+from rustree import _rs
 from rustree.accessors import (
     AutoEntry,
     MappingEntry,
@@ -79,11 +79,11 @@ class PyTreeNodeRegistryEntry(Generic[T]):
     flatten_func: FlattenFunc[T]
     unflatten_func: UnflattenFunc[T]
 
-    if sys.version_info >= (3, 10):
+    if sys.version_info >= (3, 10):  # pragma: >=3.10 cover
         _: dataclasses.KW_ONLY  # Python 3.10+
 
     path_entry_type: builtins.type[PyTreeEntry] = AutoEntry
-    kind: PyTreeKind = PyTreeKind.CUSTOM
+    kind: PyTreeKind = dataclasses.field(default_factory=lambda: PyTreeKind.CUSTOM)
     namespace: str = ''
 
 
@@ -159,7 +159,7 @@ def pytree_node_registry_get(  # noqa: C901
     *,
     namespace: str = '',
 ) -> dict[type, PyTreeNodeRegistryEntry] | PyTreeNodeRegistryEntry | None:
-    """Lookup the pytree node registry.
+    """Look up the pytree node registry.
 
     >>> register_pytree_node.get()  # doctest: +IGNORE_WHITESPACE,ELLIPSIS
     {
@@ -220,9 +220,11 @@ def pytree_node_registry_get(  # noqa: C901
         and cls is not namedtuple  # noqa: PYI024
         and not inspect.isclass(cls)
     ):
-        raise TypeError(f'Expected a class or None, got {cls!r}.')
+        raise TypeError(f'Expected a class or None, got {cls!r}.')  # pragma: !=3.9 cover
     if not isinstance(namespace, str):
-        raise TypeError(f'The namespace must be a string, got {namespace!r}.')
+        raise TypeError(  # pragma: !=3.9 cover
+            f'The namespace must be a string, got {namespace!r}.',
+        )
 
     if cls is None:
         namespaces = frozenset({namespace, ''})
@@ -308,6 +310,11 @@ def register_pytree_node(
         TypeError: If the namespace is not a string.
         ValueError: If the namespace is an empty string.
         ValueError: If the type is already registered in the registry.
+
+    .. versionadded:: 0.12.0
+        The ``path_entry_type`` argument to specify the path entry type used in
+        :meth:`PyTreeSpec.accessors` and :func:`tree_flatten_with_accessor`.
+        If not provided, :class:`AutoEntry` will be used.
 
     Examples:
         >>> # Register a Python type with lambda functions
@@ -427,6 +434,7 @@ def register_pytree_node_class(
 ) -> CustomTreeNodeType: ...
 
 
+# pylint: disable-next=too-many-branches
 def register_pytree_node_class(  # noqa: C901
     cls: CustomTreeNodeType | str | None = None,
     /,
@@ -466,6 +474,21 @@ def register_pytree_node_class(  # noqa: C901
         TypeError: If the class does not define the required method pairs.
         ValueError: If the namespace is an empty string.
         ValueError: If the type is already registered in the registry.
+
+    .. versionadded:: 0.12.0
+        The ``TREE_PATH_ENTRY_TYPE`` class variable to specify the path entry type used in
+        :meth:`PyTreeSpec.accessors` and :func:`tree_flatten_with_accessor`.
+        If not provided, :class:`AutoEntry` will be used.
+
+    .. versionadded:: 0.18.0
+        Previously, this function looked for methods named ``tree_flatten`` and ``tree_unflatten``
+        for the given class. Since version 0.18.0, it prefers methods named ``__tree_flatten__``
+        and ``__tree_unflatten__`` instead. The old method names are still supported for
+        backward compatibility, but it is recommended to use the new method names.
+        The method resolution follows this priority:
+        1. If both ``__tree_flatten__`` and ``__tree_unflatten__`` are defined, use them directly.
+        2. If both ``tree_flatten`` and ``tree_unflatten`` are defined, wrap them as dunder methods.
+        3. If neither complete pair is available, raise a :exc:`TypeError` suggesting the new method names.
 
     This function is a thin wrapper around :func:`register_pytree_node`, and provides a
     class-oriented interface:

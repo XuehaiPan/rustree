@@ -22,7 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar, overload
 from typing_extensions import Self  # Python 3.11+
 
-import rustree._rs as _rs
+from rustree import _rs
 from rustree._rs import PyTreeKind
 
 
@@ -434,12 +434,12 @@ class PyTreeAccessor(tuple[PyTreeEntry, ...]):
         return string
 
 
-# These classes are used internally in the Rust side for accessor APIs
+# These classes are used internally in the C++ side for accessor APIs
 _name, _cls = '', object
 for _name in __all__:
     _cls = globals()[_name]
     if not isinstance(_cls, type):  # pragma: no cover
         raise TypeError(f'Expected a class, got {_cls!r}.')
-    _cls.__module__ = 'optree'
+    _cls.__module__ = 'rustree'
     setattr(_rs, _name, _cls)
 del _name, _cls

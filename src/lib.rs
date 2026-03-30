@@ -15,16 +15,26 @@
 
 use pyo3::ffi;
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyModule};
 
 mod pytypes;
 mod registry;
 mod treespec;
 
-#[pymodule]
+#[pymodule(gil_used = false)]
 #[pyo3(name = "_rs")]
 fn build_extension(m: &Bound<PyModule>) -> PyResult<()> {
     m.add("Py_TPFLAGS_BASETYPE", ffi::Py_TPFLAGS_BASETYPE)?;
-    m.add_class::<crate::registry::PyTreeKind>()?;
+    m.add(
+        "__doc__",
+        "Optimized PyTree Utilities. (C extension module built from src/rustree.cpp)",
+    )?;
+    m.add("Py_DEBUG", cfg!(py_sys_config = "Py_DEBUG"))?;
+    m.add("Py_GIL_DISABLED", cfg!(Py_GIL_DISABLED))?;
+    m.add("RUSTREE_HAS_NATIVE_ENUM", true)?;
+    m.add("RUSTREE_HAS_SUBINTERPRETER_SUPPORT", false)?;
+    m.add("RUSTREE_HAS_READ_WRITE_LOCK", true)?;
+    crate::registry::add_pytree_kind_enum(m)?;
     m.add_function(wrap_pyfunction!(crate::pytypes::is_namedtuple, m)?)?;
     m.add_function(wrap_pyfunction!(crate::pytypes::is_namedtuple_instance, m)?)?;
     m.add_function(wrap_pyfunction!(crate::pytypes::is_namedtuple_class, m)?)?;
@@ -43,11 +53,36 @@ fn build_extension(m: &Bound<PyModule>) -> PyResult<()> {
         crate::registry::set_dict_insertion_ordered,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(crate::registry::get_registry_size, m)?)?;
 
     m.add("MAX_RECURSION_DEPTH", crate::treespec::MAX_RECURSION_DEPTH)?;
     m.add_class::<crate::treespec::PyTreeSpec>()?;
+    m.add_class::<crate::treespec::PyTreeIter>()?;
     m.add_function(wrap_pyfunction!(crate::treespec::is_leaf, m)?)?;
     m.add_function(wrap_pyfunction!(crate::treespec::flatten, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::treespec::flatten_with_path, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::treespec::_deserialize_treespec, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::treespec::pytreespec_apply, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::treespec::make_leaf, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::treespec::make_none, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::treespec::make_from_collection, m)?)?;
+
+    let globals = PyDict::new(m.py());
+    globals.set_item("_C", m)?;
+    m.py().run(
+        ffi::c_str!(
+            r#"
+def _rustree_bind_traverse(cls, func):
+    def traverse(self, leaves, /, f_node=None, f_leaf=None):
+        return func(self, leaves, f_node, f_leaf)
+    cls.traverse = traverse
+_rustree_bind_traverse(_C.PyTreeSpec, _C._pytreespec_traverse)
+del _rustree_bind_traverse
+"#
+        ),
+        Some(&globals),
+        None,
+    )?;
 
     crate::pytypes::get_rust_module(m.py(), Some(m.clone().unbind()));
     Ok(())

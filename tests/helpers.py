@@ -1,0 +1,1863 @@
+# Copyright 2022-2026 MetaOPT Team. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+# pylint: disable=missing-class-docstring,missing-function-docstring,invalid-name
+
+import contextlib
+import dataclasses
+import functools
+import gc
+import itertools
+import os
+import platform
+import subprocess
+import sys
+import sysconfig
+import textwrap
+import time
+import types
+from collections import OrderedDict, UserDict, defaultdict, deque, namedtuple
+from pathlib import Path
+from typing import Any, NamedTuple
+
+import pytest
+
+import rustree
+from rustree._rs import (
+    RUSTREE_HAS_NATIVE_ENUM,
+    RUSTREE_HAS_SUBINTERPRETER_SUPPORT,
+    Py_DEBUG,
+    Py_GIL_DISABLED,
+    get_registry_size,
+)
+from rustree.registry import __GLOBAL_NAMESPACE as GLOBAL_NAMESPACE
+from rustree.registry import _NODETYPE_REGISTRY as NODETYPE_REGISTRY
+
+
+TEST_ROOT = Path(__file__).absolute().parent
+
+
+INITIAL_REGISTRY_SIZE = get_registry_size()
+assert INITIAL_REGISTRY_SIZE == 8
+assert INITIAL_REGISTRY_SIZE + 2 == len(NODETYPE_REGISTRY)
+
+_ = RUSTREE_HAS_NATIVE_ENUM
+_ = RUSTREE_HAS_SUBINTERPRETER_SUPPORT
+
+if sysconfig.get_config_var('Py_DEBUG') is None:
+    assert Py_DEBUG == hasattr(sys, 'gettotalrefcount')
+else:
+    assert Py_DEBUG == bool(int(sysconfig.get_config_var('Py_DEBUG') or '0'))
+skipif_pydebug = pytest.mark.skipif(
+    Py_DEBUG,
+    reason='Py_DEBUG is enabled which causes too much overhead',
+)
+
+assert Py_GIL_DISABLED == bool(int(sysconfig.get_config_var('Py_GIL_DISABLED') or '0'))
+skipif_freethreading = pytest.mark.skipif(
+    Py_GIL_DISABLED,
+    reason='Py_GIL_DISABLED is set',
+)
+
+PYPY = platform.python_implementation() == 'PyPy'
+skipif_pypy = pytest.mark.skipif(
+    PYPY,
+    reason='PyPy does not support weakref and refcount correctly',
+)
+
+IOS = sys.platform.startswith(('ios', 'iphoneos', 'iphonesimulator'))
+skipif_ios = pytest.mark.skipif(
+    IOS,
+    reason='iOS does not support subprocesses',
+)
+
+ANDROID = sys.platform.startswith('android')
+skipif_android = pytest.mark.skipif(
+    ANDROID,
+    reason='Android testbed returns wrong `sys.executable` which breaks subprocesses',
+)
+
+WASM = sys.platform.startswith(('emscripten', 'wasi'))
+skipif_wasm = pytest.mark.skipif(
+    WASM,
+    reason='WASM does not support threading and multiprocessing and has limited stack size',
+)
+
+
+NUM_GC_REPEAT = 10 if Py_GIL_DISABLED else 5
+
+
+def gc_collect(repeat=NUM_GC_REPEAT):
+    for _ in range(repeat):
+        gc.collect()
+
+
+def getrefcount(obj=None):
+    gc_collect()
+    return sys.getrefcount(obj)
+
+
+def parametrize(**argvalues):
+    arguments = list(argvalues)
+    argvalues = list(itertools.product(*tuple(map(argvalues.get, arguments))))
+
+    def represent(value):
+        if isinstance(value, types.FunctionType):
+            return f"<function '{value.__module__}.{value.__qualname__}'>"
+        return repr(value)
+
+    ids = tuple(
+        '-'.join(f'{arg}({represent(value)})' for arg, value in zip(arguments, values))
+        for values in argvalues
+    )
+
+    return pytest.mark.parametrize(arguments, argvalues, ids=ids)
+
+
+@contextlib.contextmanager
+def systrace(function):
+    old_trace = sys.gettrace()
+    sys.settrace(function)
+    try:
+        yield
+    finally:
+        sys.settrace(old_trace)
+
+
+@contextlib.contextmanager
+def recursionlimit(limit):
+    with systrace(None):
+        gc_collect()
+        old_limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(min(old_limit, limit))
+        try:
+            yield
+        finally:
+            sys.setrecursionlimit(old_limit)
+
+
+def disable_systrace(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with systrace(None):
+            return func(*args, **kwargs)
+
+    return wrapper
+
+
+class CalledProcessError(subprocess.CalledProcessError):
+    def __str__(self):
+        return ''.join(
+            (
+                super().__str__(),
+                f'\nOutput:\n{self.output}' if self.output is not None else '',
+                f'\nStderr:\n{self.stderr}' if self.stderr is not None else '',
+            ),
+        )
+
+
+def check_script_in_subprocess(
+    script,
+    /,
+    *,
+    output,
+    timeout=120.0,
+    cwd=TEST_ROOT,
+    env=None,
+    rerun=1,
+):
+    script = textwrap.dedent(script).strip()
+    result = ''
+    for _ in range(rerun):
+        try:
+            result = subprocess.check_output(
+                [sys.executable, '-u', '-X', 'dev', '-Walways', '-Werror', '-c', script],
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                timeout=timeout,
+                cwd=cwd,
+                env={
+                    key: value
+                    for key, value in (env if env is not None else os.environ).items()
+                    if (
+                        not key.startswith(('PYTHON', 'PYTEST', 'COV_'))
+                        or key in ('PYTHON_GIL', 'PYTHONDEVMODE', 'PYTHONHASHSEED')
+                    )
+                },
+            )
+        except subprocess.CalledProcessError as ex:
+            raise CalledProcessError(ex.returncode, ex.cmd, ex.output, ex.stderr) from None
+        if output is not None:
+            assert result == output
+    return result
+
+
+MISSING = object()
+
+
+def assert_equal_type_and_value(actual, expected=MISSING, *, expected_type=None):
+    if expected_type is None:
+        assert expected is not MISSING
+        expected_type = type(expected)
+    assert type(actual) is expected_type
+
+    if expected is MISSING:
+        return
+
+    assert actual == expected
+    if isinstance(expected, rustree.PyTreeAccessor):
+        assert hash(actual) == hash(expected)
+        for i, j in zip(actual, expected):
+            assert_equal_type_and_value(i, j)
+
+
+def is_tuple(tup):
+    return isinstance(tup, tuple)
+
+
+def is_list(lst):
+    return isinstance(lst, list)
+
+
+def is_dict(dct):
+    return isinstance(dct, dict)
+
+
+def is_primitive_collection(obj):
+    if type(obj) in {tuple, list, deque}:
+        return all(isinstance(item, (int, float, str, bool, type(None))) for item in obj)
+    if type(obj) in {dict, OrderedDict, defaultdict}:
+        return all(isinstance(value, (int, float, str, bool, type(None))) for value in obj.values())
+    return False
+
+
+def is_none(none):
+    return none is None
+
+
+def is_not_none(none):
+    return none is not None
+
+
+def always(obj):  # pylint: disable=unused-argument
+    return True
+
+
+def never(obj):  # pylint: disable=unused-argument
+    return False
+
+
+IS_LEAF_FUNCTIONS = (
+    is_tuple,
+    is_list,
+    is_dict,
+    is_primitive_collection,
+    is_none,
+    is_not_none,
+    always,
+    never,
+)
+
+
+CustomTuple = namedtuple('CustomTuple', ('foo', 'bar'))  # noqa: PYI024
+
+
+class CustomNamedTupleSubclass(CustomTuple):
+    pass
+
+
+class EmptyTuple(NamedTuple):
+    pass
+
+
+# sys.float_info(max=*, max_exp=*, max_10_exp=*, min=*, min_exp=*, min_10_exp=*, dig=*, mant_dig=*, epsilon=*, radix=*, rounds=*)
+SysFloatInfoType = type(sys.float_info)
+# time.struct_time(tm_year=*, tm_mon=*, tm_mday=*, tm_hour=*, tm_min=*, tm_sec=*, tm_wday=*, tm_yday=*, tm_isdst=*)
+TimeStructTimeType = time.struct_time
+
+if PYPY:
+    SysFloatInfoType.__module__ = 'sys'
+    TimeStructTimeType.__module__ = 'time'
+
+
+class Vector3D:
+    def __init__(self, x, y, z):
+        self.x = x
+        self.y = y
+        self.z = z
+
+    def __eq__(self, other):
+        return self.x == other.x and self.y == other.y and self.z == other.z
+
+    def __hash__(self):
+        return hash((self.x, self.y, self.z))
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(x={self.x}, y={self.y}, z={self.z})'
+
+
+class Vector3DEntry(rustree.PyTreeEntry):
+    def __call__(self, obj):
+        assert self.entry in {0, 1}
+        return obj.x if self.entry == 0 else obj.y
+
+
+rustree.register_pytree_node(
+    Vector3D,
+    lambda o: ((o.x, o.y), o.z),
+    lambda z, xy: Vector3D(xy[0], xy[1], z),
+    path_entry_type=Vector3DEntry,
+    namespace=GLOBAL_NAMESPACE,
+)
+
+
+@rustree.register_pytree_node_class(namespace=GLOBAL_NAMESPACE)
+class Vector2D:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def __getitem__(self, index):
+        assert index in {0, 1}
+        return self.x if index == 0 else self.y
+
+    def __eq__(self, other):
+        return isinstance(other, Vector2D) and (self.x, self.y) == (other.x, other.y)
+
+    def __hash__(self):
+        return hash((self.x, self.y))
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(x={self.x}, y={self.y})'
+
+    def tree_flatten(self):
+        return (self.x, self.y), None
+
+    @classmethod
+    def tree_unflatten(cls, metadata, children):  # pylint: disable=unused-argument
+        return cls(*children)
+
+
+@rustree.register_pytree_node_class(namespace=GLOBAL_NAMESPACE)
+@dataclasses.dataclass
+class MyDataclass:
+    alpha: Any
+    beta: Any
+    gamma: Any
+    delta: Any
+
+    def __tree_flatten__(self):
+        return (
+            (self.alpha, self.beta, self.gamma, self.delta),
+            None,
+            ('alpha', 'beta', 'gamma', 'delta'),
+        )
+
+    @classmethod
+    def __tree_unflatten__(cls, metadata, children):
+        return cls(*children)
+
+
+@rustree.register_pytree_node_class(
+    path_entry_type=rustree.GetAttrEntry,
+    namespace=GLOBAL_NAMESPACE,
+)
+@dataclasses.dataclass
+class MyOtherDataclass:
+    a: Any
+    b: Any
+    c: Any
+    d: Any
+
+    def tree_flatten(self):
+        return (
+            (self.a, self.c),
+            (self.b, self.d),
+            ('a', 'c'),
+        )
+
+    @classmethod
+    def tree_unflatten(cls, metadata, children):
+        a, c = children
+        b, d = metadata
+        return cls(a, b, c, d)
+
+
+@rustree.register_pytree_node_class(namespace=GLOBAL_NAMESPACE)
+@dataclasses.dataclass
+class MyAnotherDataclass:
+    x: Any
+    y: Any
+    z: Any
+
+    def __tree_flatten__(self):
+        return (self.x, self.y, self.z), None
+
+    @classmethod
+    def __tree_unflatten__(cls, metadata, children):
+        return cls(*children)
+
+
+@rustree.register_pytree_node_class(namespace=GLOBAL_NAMESPACE)
+class FlatCache:
+    TREE_PATH_ENTRY_TYPE = rustree.GetItemEntry
+
+    def __init__(self, structured, *, leaves=None, treespec=None):
+        if treespec is None:
+            leaves, treespec = rustree.tree_flatten(structured)
+        self._structured = structured
+        self.treespec = treespec
+        self.leaves = leaves
+
+    def __getitem__(self, index):
+        return self.leaves[index]
+
+    def __eq__(self, other):
+        return isinstance(other, FlatCache) and self.structured == other.structured
+
+    def __hash__(self):
+        return hash(self.structured)
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}({self.structured!r})'
+
+    @property
+    def structured(self):
+        if self._structured is None:
+            self._structured = rustree.tree_unflatten(self.treespec, self.leaves)
+        return self._structured
+
+    def __tree_flatten__(self):
+        return self.leaves, self.treespec
+
+    @classmethod
+    def __tree_unflatten__(cls, metadata, children):
+        if not rustree.all_leaves(children):
+            children, metadata = rustree.tree_flatten(rustree.tree_unflatten(metadata, children))
+        return cls(structured=None, leaves=children, treespec=metadata)
+
+
+@rustree.register_pytree_node_class(namespace=GLOBAL_NAMESPACE)
+class MyDict(UserDict):
+    TREE_PATH_ENTRY_TYPE = rustree.MappingEntry
+
+    def __tree_flatten__(self):
+        reversed_keys = sorted(self.keys(), reverse=True)
+        return [self[key] for key in reversed_keys], reversed_keys, reversed_keys
+
+    @classmethod
+    def __tree_unflatten__(cls, metadata, children):
+        return cls(zip(metadata, children))
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}({super().__repr__()})'
+
+
+@rustree.register_pytree_node_class('namespace')
+class MyAnotherDict(MyDict):
+    pass
+
+
+class Counter:
+    def __init__(self, start=0):
+        self.count = start
+
+    def increment(self, n=1):
+        self.count += n
+        return self.count
+
+    def __int__(self):
+        return self.count
+
+    def __eq__(self, other):
+        return isinstance(other, Counter) and self.count == other.count
+
+    def __hash__(self):
+        return hash(self.count)
+
+    def __repr__(self):
+        return f'Counter({self.count})'
+
+    def __next__(self):
+        return self.increment()
+
+
+NAMESPACED_TREE = MyAnotherDict([('baz', 101), ('foo', MyDict(a=1, b=2, c=None))])
+
+
+# pylint: disable=line-too-long
+TREES = (
+    1,
+    None,
+    (None,),
+    (1, None),
+    (),
+    [],
+    ([()]),
+    (1, 2),
+    ((1, 'foo'), ['bar', (3, None, 7)]),
+    [3],
+    EmptyTuple(),
+    [3, CustomTuple(foo=(3, CustomTuple(foo=3, bar=None)), bar={'baz': 34})],
+    TimeStructTimeType((*range(1, 3), None, *range(3, 9))),
+    SysFloatInfoType(
+        (*range(1, 10), None, TimeStructTimeType((*range(10, 15), None, *range(15, 20)))),
+    ),
+    [Vector3D(3, None, [4, 'foo'])],
+    Vector2D(2, 3.0),
+    {},
+    {'a': 1, 'b': 2},
+    {'b': (2, 3), 'a': 1, 'c': None, 'd': {'f': 4, 'e': None}},
+    OrderedDict(),
+    OrderedDict([('foo', 34), ('baz', 101), ('something', -42)]),
+    OrderedDict([('foo', 34), ('baz', 101), ('something', deque([None, 2, 3]))]),
+    OrderedDict([('foo', 34), ('baz', 101), ('something', deque([None, None, 3], maxlen=2))]),
+    OrderedDict([('foo', 34), ('baz', 101), ('something', deque([None, 2, 3], maxlen=2))]),
+    defaultdict(),
+    defaultdict(int),
+    defaultdict(dict, [('foo', 34), ('baz', 101), ('something', -42)]),
+    deque(),
+    deque(maxlen=0),
+    deque([None, 2, 3]),
+    deque([None, None, 3], maxlen=2),
+    MyDict([('baz', 101), ('foo', MyDict(a=1, b=2, c=None))]),
+    NAMESPACED_TREE,
+    CustomNamedTupleSubclass(foo='hello', bar=3.5),
+    MyDataclass(2, None, 3, 5),
+    MyOtherDataclass(7, 11, None, 13),
+    MyAnotherDataclass(MyDataclass(2, 3, None, 5), 7, MyOtherDataclass(11, None, 13, 19)),
+    FlatCache(None),
+    FlatCache(1),
+    FlatCache({'a': [1, 2]}),
+)
+
+
+TREE_PATHS_NONE_IS_NODE = [
+    [()],
+    [],
+    [],
+    [(0,)],
+    [],
+    [],
+    [],
+    [(0,), (1,)],
+    [(0, 0), (0, 1), (1, 0), (1, 1, 0), (1, 1, 2)],
+    [(0,)],
+    [],
+    [(0,), (1, 0, 0), (1, 0, 1, 0), (1, 1, 'baz')],
+    [(0,), (1,), (3,), (4,), (5,), (6,), (7,), (8,)],
+    [
+        (0,),
+        (1,),
+        (2,),
+        (3,),
+        (4,),
+        (5,),
+        (6,),
+        (7,),
+        (8,),
+        (10, 0),
+        (10, 1),
+        (10, 2),
+        (10, 3),
+        (10, 4),
+        (10, 6),
+        (10, 7),
+        (10, 8),
+    ],
+    [(0, 0)],
+    [(0,), (1,)],
+    [],
+    [('a',), ('b',)],
+    [('a',), ('b', 0), ('b', 1), ('d', 'f')],
+    [],
+    [('foo',), ('baz',), ('something',)],
+    [('foo',), ('baz',), ('something', 1), ('something', 2)],
+    [('foo',), ('baz',), ('something', 1)],
+    [('foo',), ('baz',), ('something', 0), ('something', 1)],
+    [],
+    [],
+    [('baz',), ('foo',), ('something',)],
+    [],
+    [],
+    [(1,), (2,)],
+    [(1,)],
+    [('foo', 'b'), ('foo', 'a'), ('baz',)],
+    [()],
+    [(0,), (1,)],
+    [('alpha',), ('gamma',), ('delta',)],
+    [('a',)],
+    [(0, 'alpha'), (0, 'beta'), (0, 'delta'), (1,), (2, 'a'), (2, 'c')],
+    [],
+    [(0,)],
+    [(0,), (1,)],
+]
+
+TREE_PATHS_NONE_IS_LEAF = [
+    [()],
+    [()],
+    [(0,)],
+    [(0,), (1,)],
+    [],
+    [],
+    [],
+    [(0,), (1,)],
+    [(0, 0), (0, 1), (1, 0), (1, 1, 0), (1, 1, 1), (1, 1, 2)],
+    [(0,)],
+    [],
+    [(0,), (1, 0, 0), (1, 0, 1, 0), (1, 0, 1, 1), (1, 1, 'baz')],
+    [(0,), (1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,)],
+    [
+        (0,),
+        (1,),
+        (2,),
+        (3,),
+        (4,),
+        (5,),
+        (6,),
+        (7,),
+        (8,),
+        (9,),
+        (10, 0),
+        (10, 1),
+        (10, 2),
+        (10, 3),
+        (10, 4),
+        (10, 5),
+        (10, 6),
+        (10, 7),
+        (10, 8),
+    ],
+    [(0, 0), (0, 1)],
+    [(0,), (1,)],
+    [],
+    [('a',), ('b',)],
+    [('a',), ('b', 0), ('b', 1), ('c',), ('d', 'e'), ('d', 'f')],
+    [],
+    [('foo',), ('baz',), ('something',)],
+    [('foo',), ('baz',), ('something', 0), ('something', 1), ('something', 2)],
+    [('foo',), ('baz',), ('something', 0), ('something', 1)],
+    [('foo',), ('baz',), ('something', 0), ('something', 1)],
+    [],
+    [],
+    [('baz',), ('foo',), ('something',)],
+    [],
+    [],
+    [(0,), (1,), (2,)],
+    [(0,), (1,)],
+    [('foo', 'c'), ('foo', 'b'), ('foo', 'a'), ('baz',)],
+    [()],
+    [(0,), (1,)],
+    [('alpha',), ('beta',), ('gamma',), ('delta',)],
+    [('a',), ('c',)],
+    [(0, 'alpha'), (0, 'beta'), (0, 'gamma'), (0, 'delta'), (1,), (2, 'a'), (2, 'c')],
+    [],
+    [(0,)],
+    [(0,), (1,)],
+]
+
+TREE_PATHS = {
+    rustree.NONE_IS_NODE: TREE_PATHS_NONE_IS_NODE,
+    rustree.NONE_IS_LEAF: TREE_PATHS_NONE_IS_LEAF,
+}
+
+
+TREE_ACCESSORS_NONE_IS_NODE = [
+    [rustree.PyTreeAccessor()],
+    [],
+    [],
+    [
+        rustree.PyTreeAccessor((rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),)),
+    ],
+    [],
+    [],
+    [],
+    [
+        rustree.PyTreeAccessor((rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),)),
+        rustree.PyTreeAccessor((rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),)),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),
+                rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+                rustree.SequenceEntry(0, list, rustree.PyTreeKind.LIST),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+                rustree.SequenceEntry(1, list, rustree.PyTreeKind.LIST),
+                rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+                rustree.SequenceEntry(1, list, rustree.PyTreeKind.LIST),
+                rustree.SequenceEntry(2, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+    ],
+    [rustree.PyTreeAccessor((rustree.SequenceEntry(0, list, rustree.PyTreeKind.LIST),))],
+    [],
+    [
+        rustree.PyTreeAccessor((rustree.SequenceEntry(0, list, rustree.PyTreeKind.LIST),)),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(1, list, rustree.PyTreeKind.LIST),
+                rustree.NamedTupleEntry(0, CustomTuple, rustree.PyTreeKind.NAMEDTUPLE),
+                rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(1, list, rustree.PyTreeKind.LIST),
+                rustree.NamedTupleEntry(0, CustomTuple, rustree.PyTreeKind.NAMEDTUPLE),
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+                rustree.NamedTupleEntry(0, CustomTuple, rustree.PyTreeKind.NAMEDTUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(1, list, rustree.PyTreeKind.LIST),
+                rustree.NamedTupleEntry(1, CustomTuple, rustree.PyTreeKind.NAMEDTUPLE),
+                rustree.MappingEntry('baz', dict, rustree.PyTreeKind.DICT),
+            ),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    0,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    1,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    3,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    4,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    5,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    6,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    7,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    8,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(0, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(1, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(2, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(3, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(4, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(5, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(6, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(7, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(8, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    0,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    1,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    2,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    3,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    4,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    6,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    7,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    8,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(0, list, rustree.PyTreeKind.LIST),
+                Vector3DEntry(0, Vector3D, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor((rustree.FlattenedEntry(0, Vector2D, rustree.PyTreeKind.CUSTOM),)),
+        rustree.PyTreeAccessor((rustree.FlattenedEntry(1, Vector2D, rustree.PyTreeKind.CUSTOM),)),
+    ],
+    [],
+    [
+        rustree.PyTreeAccessor((rustree.MappingEntry('a', dict, rustree.PyTreeKind.DICT),)),
+        rustree.PyTreeAccessor((rustree.MappingEntry('b', dict, rustree.PyTreeKind.DICT),)),
+    ],
+    [
+        rustree.PyTreeAccessor((rustree.MappingEntry('a', dict, rustree.PyTreeKind.DICT),)),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('b', dict, rustree.PyTreeKind.DICT),
+                rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('b', dict, rustree.PyTreeKind.DICT),
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('d', dict, rustree.PyTreeKind.DICT),
+                rustree.MappingEntry('f', dict, rustree.PyTreeKind.DICT),
+            ),
+        ),
+    ],
+    [],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('foo', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('baz', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('something', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('foo', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('baz', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('something', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),
+                rustree.SequenceEntry(1, deque, rustree.PyTreeKind.DEQUE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('something', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),
+                rustree.SequenceEntry(2, deque, rustree.PyTreeKind.DEQUE),
+            ),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('foo', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('baz', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('something', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),
+                rustree.SequenceEntry(1, deque, rustree.PyTreeKind.DEQUE),
+            ),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('foo', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('baz', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('something', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),
+                rustree.SequenceEntry(0, deque, rustree.PyTreeKind.DEQUE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('something', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),
+                rustree.SequenceEntry(1, deque, rustree.PyTreeKind.DEQUE),
+            ),
+        ),
+    ],
+    [],
+    [],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('baz', defaultdict, rustree.PyTreeKind.DEFAULTDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('foo', defaultdict, rustree.PyTreeKind.DEFAULTDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('something', defaultdict, rustree.PyTreeKind.DEFAULTDICT),),
+        ),
+    ],
+    [],
+    [],
+    [
+        rustree.PyTreeAccessor((rustree.SequenceEntry(1, deque, rustree.PyTreeKind.DEQUE),)),
+        rustree.PyTreeAccessor((rustree.SequenceEntry(2, deque, rustree.PyTreeKind.DEQUE),)),
+    ],
+    [rustree.PyTreeAccessor((rustree.SequenceEntry(1, deque, rustree.PyTreeKind.DEQUE),))],
+    [
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('foo', MyDict, rustree.PyTreeKind.CUSTOM),
+                rustree.MappingEntry('b', MyDict, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('foo', MyDict, rustree.PyTreeKind.CUSTOM),
+                rustree.MappingEntry('a', MyDict, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor((rustree.MappingEntry('baz', MyDict, rustree.PyTreeKind.CUSTOM),)),
+    ],
+    [rustree.PyTreeAccessor()],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.NamedTupleEntry(0, CustomNamedTupleSubclass, rustree.PyTreeKind.NAMEDTUPLE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.NamedTupleEntry(1, CustomNamedTupleSubclass, rustree.PyTreeKind.NAMEDTUPLE),),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.DataclassEntry('alpha', MyDataclass, rustree.PyTreeKind.CUSTOM),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.DataclassEntry('gamma', MyDataclass, rustree.PyTreeKind.CUSTOM),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.DataclassEntry('delta', MyDataclass, rustree.PyTreeKind.CUSTOM),),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.GetAttrEntry('a', MyOtherDataclass, rustree.PyTreeKind.CUSTOM),),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (
+                rustree.DataclassEntry(0, MyAnotherDataclass, rustree.PyTreeKind.CUSTOM),
+                rustree.DataclassEntry('alpha', MyDataclass, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.DataclassEntry(0, MyAnotherDataclass, rustree.PyTreeKind.CUSTOM),
+                rustree.DataclassEntry('beta', MyDataclass, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.DataclassEntry(0, MyAnotherDataclass, rustree.PyTreeKind.CUSTOM),
+                rustree.DataclassEntry('delta', MyDataclass, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.DataclassEntry(1, MyAnotherDataclass, rustree.PyTreeKind.CUSTOM),),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.DataclassEntry(2, MyAnotherDataclass, rustree.PyTreeKind.CUSTOM),
+                rustree.GetAttrEntry('a', MyOtherDataclass, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.DataclassEntry(2, MyAnotherDataclass, rustree.PyTreeKind.CUSTOM),
+                rustree.GetAttrEntry('c', MyOtherDataclass, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+    ],
+    [],
+    [rustree.PyTreeAccessor((rustree.GetItemEntry(0, FlatCache, rustree.PyTreeKind.CUSTOM),))],
+    [
+        rustree.PyTreeAccessor((rustree.GetItemEntry(0, FlatCache, rustree.PyTreeKind.CUSTOM),)),
+        rustree.PyTreeAccessor((rustree.GetItemEntry(1, FlatCache, rustree.PyTreeKind.CUSTOM),)),
+    ],
+]
+
+TREE_ACCESSORS_NONE_IS_LEAF = [
+    [rustree.PyTreeAccessor()],
+    [rustree.PyTreeAccessor()],
+    [rustree.PyTreeAccessor((rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),))],
+    [
+        rustree.PyTreeAccessor((rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),)),
+        rustree.PyTreeAccessor((rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),)),
+    ],
+    [],
+    [],
+    [],
+    [
+        rustree.PyTreeAccessor((rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),)),
+        rustree.PyTreeAccessor((rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),)),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),
+                rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+                rustree.SequenceEntry(0, list, rustree.PyTreeKind.LIST),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+                rustree.SequenceEntry(1, list, rustree.PyTreeKind.LIST),
+                rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+                rustree.SequenceEntry(1, list, rustree.PyTreeKind.LIST),
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+                rustree.SequenceEntry(1, list, rustree.PyTreeKind.LIST),
+                rustree.SequenceEntry(2, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+    ],
+    [rustree.PyTreeAccessor((rustree.SequenceEntry(0, list, rustree.PyTreeKind.LIST),))],
+    [],
+    [
+        rustree.PyTreeAccessor((rustree.SequenceEntry(0, list, rustree.PyTreeKind.LIST),)),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(1, list, rustree.PyTreeKind.LIST),
+                rustree.NamedTupleEntry(0, CustomTuple, rustree.PyTreeKind.NAMEDTUPLE),
+                rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(1, list, rustree.PyTreeKind.LIST),
+                rustree.NamedTupleEntry(0, CustomTuple, rustree.PyTreeKind.NAMEDTUPLE),
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+                rustree.NamedTupleEntry(0, CustomTuple, rustree.PyTreeKind.NAMEDTUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(1, list, rustree.PyTreeKind.LIST),
+                rustree.NamedTupleEntry(0, CustomTuple, rustree.PyTreeKind.NAMEDTUPLE),
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+                rustree.NamedTupleEntry(1, CustomTuple, rustree.PyTreeKind.NAMEDTUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(1, list, rustree.PyTreeKind.LIST),
+                rustree.NamedTupleEntry(1, CustomTuple, rustree.PyTreeKind.NAMEDTUPLE),
+                rustree.MappingEntry('baz', dict, rustree.PyTreeKind.DICT),
+            ),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    0,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    1,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    2,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    3,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    4,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    5,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    6,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    7,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    8,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(0, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(1, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(2, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(3, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(4, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(5, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(6, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(7, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(8, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.StructSequenceEntry(9, SysFloatInfoType, rustree.PyTreeKind.STRUCTSEQUENCE),),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    0,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    1,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    2,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    3,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    4,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    5,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    6,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    7,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.StructSequenceEntry(
+                    10,
+                    SysFloatInfoType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+                rustree.StructSequenceEntry(
+                    8,
+                    TimeStructTimeType,
+                    rustree.PyTreeKind.STRUCTSEQUENCE,
+                ),
+            ),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(0, list, rustree.PyTreeKind.LIST),
+                Vector3DEntry(0, Vector3D, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.SequenceEntry(0, list, rustree.PyTreeKind.LIST),
+                Vector3DEntry(1, Vector3D, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor((rustree.FlattenedEntry(0, Vector2D, rustree.PyTreeKind.CUSTOM),)),
+        rustree.PyTreeAccessor((rustree.FlattenedEntry(1, Vector2D, rustree.PyTreeKind.CUSTOM),)),
+    ],
+    [],
+    [
+        rustree.PyTreeAccessor((rustree.MappingEntry('a', dict, rustree.PyTreeKind.DICT),)),
+        rustree.PyTreeAccessor((rustree.MappingEntry('b', dict, rustree.PyTreeKind.DICT),)),
+    ],
+    [
+        rustree.PyTreeAccessor((rustree.MappingEntry('a', dict, rustree.PyTreeKind.DICT),)),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('b', dict, rustree.PyTreeKind.DICT),
+                rustree.SequenceEntry(0, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('b', dict, rustree.PyTreeKind.DICT),
+                rustree.SequenceEntry(1, tuple, rustree.PyTreeKind.TUPLE),
+            ),
+        ),
+        rustree.PyTreeAccessor((rustree.MappingEntry('c', dict, rustree.PyTreeKind.DICT),)),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('d', dict, rustree.PyTreeKind.DICT),
+                rustree.MappingEntry('e', dict, rustree.PyTreeKind.DICT),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('d', dict, rustree.PyTreeKind.DICT),
+                rustree.MappingEntry('f', dict, rustree.PyTreeKind.DICT),
+            ),
+        ),
+    ],
+    [],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('foo', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('baz', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('something', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('foo', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('baz', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('something', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),
+                rustree.SequenceEntry(0, deque, rustree.PyTreeKind.DEQUE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('something', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),
+                rustree.SequenceEntry(1, deque, rustree.PyTreeKind.DEQUE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('something', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),
+                rustree.SequenceEntry(2, deque, rustree.PyTreeKind.DEQUE),
+            ),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('foo', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('baz', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('something', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),
+                rustree.SequenceEntry(0, deque, rustree.PyTreeKind.DEQUE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('something', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),
+                rustree.SequenceEntry(1, deque, rustree.PyTreeKind.DEQUE),
+            ),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('foo', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('baz', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('something', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),
+                rustree.SequenceEntry(0, deque, rustree.PyTreeKind.DEQUE),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('something', OrderedDict, rustree.PyTreeKind.ORDEREDDICT),
+                rustree.SequenceEntry(1, deque, rustree.PyTreeKind.DEQUE),
+            ),
+        ),
+    ],
+    [],
+    [],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('baz', defaultdict, rustree.PyTreeKind.DEFAULTDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('foo', defaultdict, rustree.PyTreeKind.DEFAULTDICT),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.MappingEntry('something', defaultdict, rustree.PyTreeKind.DEFAULTDICT),),
+        ),
+    ],
+    [],
+    [],
+    [
+        rustree.PyTreeAccessor((rustree.SequenceEntry(0, deque, rustree.PyTreeKind.DEQUE),)),
+        rustree.PyTreeAccessor((rustree.SequenceEntry(1, deque, rustree.PyTreeKind.DEQUE),)),
+        rustree.PyTreeAccessor((rustree.SequenceEntry(2, deque, rustree.PyTreeKind.DEQUE),)),
+    ],
+    [
+        rustree.PyTreeAccessor((rustree.SequenceEntry(0, deque, rustree.PyTreeKind.DEQUE),)),
+        rustree.PyTreeAccessor((rustree.SequenceEntry(1, deque, rustree.PyTreeKind.DEQUE),)),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('foo', MyDict, rustree.PyTreeKind.CUSTOM),
+                rustree.MappingEntry('c', MyDict, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('foo', MyDict, rustree.PyTreeKind.CUSTOM),
+                rustree.MappingEntry('b', MyDict, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.MappingEntry('foo', MyDict, rustree.PyTreeKind.CUSTOM),
+                rustree.MappingEntry('a', MyDict, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor((rustree.MappingEntry('baz', MyDict, rustree.PyTreeKind.CUSTOM),)),
+    ],
+    [rustree.PyTreeAccessor()],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.NamedTupleEntry(0, CustomNamedTupleSubclass, rustree.PyTreeKind.NAMEDTUPLE),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.NamedTupleEntry(1, CustomNamedTupleSubclass, rustree.PyTreeKind.NAMEDTUPLE),),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.DataclassEntry('alpha', MyDataclass, rustree.PyTreeKind.CUSTOM),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.DataclassEntry('beta', MyDataclass, rustree.PyTreeKind.CUSTOM),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.DataclassEntry('gamma', MyDataclass, rustree.PyTreeKind.CUSTOM),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.DataclassEntry('delta', MyDataclass, rustree.PyTreeKind.CUSTOM),),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (rustree.GetAttrEntry('a', MyOtherDataclass, rustree.PyTreeKind.CUSTOM),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.GetAttrEntry('c', MyOtherDataclass, rustree.PyTreeKind.CUSTOM),),
+        ),
+    ],
+    [
+        rustree.PyTreeAccessor(
+            (
+                rustree.DataclassEntry(0, MyAnotherDataclass, rustree.PyTreeKind.CUSTOM),
+                rustree.DataclassEntry('alpha', MyDataclass, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.DataclassEntry(0, MyAnotherDataclass, rustree.PyTreeKind.CUSTOM),
+                rustree.DataclassEntry('beta', MyDataclass, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.DataclassEntry(0, MyAnotherDataclass, rustree.PyTreeKind.CUSTOM),
+                rustree.DataclassEntry('gamma', MyDataclass, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.DataclassEntry(0, MyAnotherDataclass, rustree.PyTreeKind.CUSTOM),
+                rustree.DataclassEntry('delta', MyDataclass, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.DataclassEntry(1, MyAnotherDataclass, rustree.PyTreeKind.CUSTOM),),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.DataclassEntry(2, MyAnotherDataclass, rustree.PyTreeKind.CUSTOM),
+                rustree.GetAttrEntry('a', MyOtherDataclass, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+        rustree.PyTreeAccessor(
+            (
+                rustree.DataclassEntry(2, MyAnotherDataclass, rustree.PyTreeKind.CUSTOM),
+                rustree.GetAttrEntry('c', MyOtherDataclass, rustree.PyTreeKind.CUSTOM),
+            ),
+        ),
+    ],
+    [],
+    [rustree.PyTreeAccessor((rustree.GetItemEntry(0, FlatCache, rustree.PyTreeKind.CUSTOM),))],
+    [
+        rustree.PyTreeAccessor((rustree.GetItemEntry(0, FlatCache, rustree.PyTreeKind.CUSTOM),)),
+        rustree.PyTreeAccessor((rustree.GetItemEntry(1, FlatCache, rustree.PyTreeKind.CUSTOM),)),
+    ],
+]
+TREE_ACCESSORS = {
+    rustree.NONE_IS_NODE: TREE_ACCESSORS_NONE_IS_NODE,
+    rustree.NONE_IS_LEAF: TREE_ACCESSORS_NONE_IS_LEAF,
+}
+
+
+TREE_STRINGS_NONE_IS_NODE = (
+    'PyTreeSpec(*)',
+    'PyTreeSpec(None)',
+    'PyTreeSpec((None,))',
+    'PyTreeSpec((*, None))',
+    'PyTreeSpec(())',
+    'PyTreeSpec([])',
+    'PyTreeSpec([()])',
+    'PyTreeSpec((*, *))',
+    'PyTreeSpec(((*, *), [*, (*, None, *)]))',
+    'PyTreeSpec([*])',
+    'PyTreeSpec(EmptyTuple())',
+    "PyTreeSpec([*, CustomTuple(foo=(*, CustomTuple(foo=*, bar=None)), bar={'baz': *})])",
+    'PyTreeSpec(time.struct_time(tm_year=*, tm_mon=*, tm_mday=None, tm_hour=*, tm_min=*, tm_sec=*, tm_wday=*, tm_yday=*, tm_isdst=*))',
+    'PyTreeSpec(sys.float_info(max=*, max_exp=*, max_10_exp=*, min=*, min_exp=*, min_10_exp=*, dig=*, mant_dig=*, epsilon=*, radix=None, rounds=time.struct_time(tm_year=*, tm_mon=*, tm_mday=*, tm_hour=*, tm_min=*, tm_sec=None, tm_wday=*, tm_yday=*, tm_isdst=*)))',
+    "PyTreeSpec([CustomTreeNode(Vector3D[[4, 'foo']], [*, None])])",
+    'PyTreeSpec(CustomTreeNode(Vector2D[None], [*, *]))',
+    'PyTreeSpec({})',
+    "PyTreeSpec({'a': *, 'b': *})",
+    "PyTreeSpec({'a': *, 'b': (*, *), 'c': None, 'd': {'e': None, 'f': *}})",
+    'PyTreeSpec(OrderedDict())',
+    "PyTreeSpec(OrderedDict({'foo': *, 'baz': *, 'something': *}))",
+    "PyTreeSpec(OrderedDict({'foo': *, 'baz': *, 'something': deque([None, *, *])}))",
+    "PyTreeSpec(OrderedDict({'foo': *, 'baz': *, 'something': deque([None, *], maxlen=2)}))",
+    "PyTreeSpec(OrderedDict({'foo': *, 'baz': *, 'something': deque([*, *], maxlen=2)}))",
+    'PyTreeSpec(defaultdict(None, {}))',
+    "PyTreeSpec(defaultdict(<class 'int'>, {}))",
+    "PyTreeSpec(defaultdict(<class 'dict'>, {'baz': *, 'foo': *, 'something': *}))",
+    'PyTreeSpec(deque([]))',
+    'PyTreeSpec(deque([], maxlen=0))',
+    'PyTreeSpec(deque([None, *, *]))',
+    'PyTreeSpec(deque([None, *], maxlen=2))',
+    "PyTreeSpec(CustomTreeNode(MyDict[['foo', 'baz']], [CustomTreeNode(MyDict[['c', 'b', 'a']], [None, *, *]), *]))",
+    'PyTreeSpec(*)',
+    'PyTreeSpec(CustomNamedTupleSubclass(foo=*, bar=*))',
+    'PyTreeSpec(CustomTreeNode(MyDataclass[None], [*, None, *, *]))',
+    'PyTreeSpec(CustomTreeNode(MyOtherDataclass[(11, 13)], [*, None]))',
+    'PyTreeSpec(CustomTreeNode(MyAnotherDataclass[None], [CustomTreeNode(MyDataclass[None], [*, *, None, *]), *, CustomTreeNode(MyOtherDataclass[(None, 19)], [*, *])]))',
+    'PyTreeSpec(CustomTreeNode(FlatCache[PyTreeSpec(None)], []))',
+    'PyTreeSpec(CustomTreeNode(FlatCache[PyTreeSpec(*)], [*]))',
+    "PyTreeSpec(CustomTreeNode(FlatCache[PyTreeSpec({'a': [*, *]})], [*, *]))",
+)
+
+TREE_STRINGS_NONE_IS_LEAF = (
+    'PyTreeSpec(*, NoneIsLeaf)',
+    'PyTreeSpec(*, NoneIsLeaf)',
+    'PyTreeSpec((*,), NoneIsLeaf)',
+    'PyTreeSpec((*, *), NoneIsLeaf)',
+    'PyTreeSpec((), NoneIsLeaf)',
+    'PyTreeSpec([], NoneIsLeaf)',
+    'PyTreeSpec([()], NoneIsLeaf)',
+    'PyTreeSpec((*, *), NoneIsLeaf)',
+    'PyTreeSpec(((*, *), [*, (*, *, *)]), NoneIsLeaf)',
+    'PyTreeSpec([*], NoneIsLeaf)',
+    'PyTreeSpec(EmptyTuple(), NoneIsLeaf)',
+    "PyTreeSpec([*, CustomTuple(foo=(*, CustomTuple(foo=*, bar=*)), bar={'baz': *})], NoneIsLeaf)",
+    'PyTreeSpec(time.struct_time(tm_year=*, tm_mon=*, tm_mday=*, tm_hour=*, tm_min=*, tm_sec=*, tm_wday=*, tm_yday=*, tm_isdst=*), NoneIsLeaf)',
+    'PyTreeSpec(sys.float_info(max=*, max_exp=*, max_10_exp=*, min=*, min_exp=*, min_10_exp=*, dig=*, mant_dig=*, epsilon=*, radix=*, rounds=time.struct_time(tm_year=*, tm_mon=*, tm_mday=*, tm_hour=*, tm_min=*, tm_sec=*, tm_wday=*, tm_yday=*, tm_isdst=*)), NoneIsLeaf)',
+    "PyTreeSpec([CustomTreeNode(Vector3D[[4, 'foo']], [*, *])], NoneIsLeaf)",
+    'PyTreeSpec(CustomTreeNode(Vector2D[None], [*, *]), NoneIsLeaf)',
+    'PyTreeSpec({}, NoneIsLeaf)',
+    "PyTreeSpec({'a': *, 'b': *}, NoneIsLeaf)",
+    "PyTreeSpec({'a': *, 'b': (*, *), 'c': *, 'd': {'e': *, 'f': *}}, NoneIsLeaf)",
+    'PyTreeSpec(OrderedDict(), NoneIsLeaf)',
+    "PyTreeSpec(OrderedDict({'foo': *, 'baz': *, 'something': *}), NoneIsLeaf)",
+    "PyTreeSpec(OrderedDict({'foo': *, 'baz': *, 'something': deque([*, *, *])}), NoneIsLeaf)",
+    "PyTreeSpec(OrderedDict({'foo': *, 'baz': *, 'something': deque([*, *], maxlen=2)}), NoneIsLeaf)",
+    "PyTreeSpec(OrderedDict({'foo': *, 'baz': *, 'something': deque([*, *], maxlen=2)}), NoneIsLeaf)",
+    'PyTreeSpec(defaultdict(None, {}), NoneIsLeaf)',
+    "PyTreeSpec(defaultdict(<class 'int'>, {}), NoneIsLeaf)",
+    "PyTreeSpec(defaultdict(<class 'dict'>, {'baz': *, 'foo': *, 'something': *}), NoneIsLeaf)",
+    'PyTreeSpec(deque([]), NoneIsLeaf)',
+    'PyTreeSpec(deque([], maxlen=0), NoneIsLeaf)',
+    'PyTreeSpec(deque([*, *, *]), NoneIsLeaf)',
+    'PyTreeSpec(deque([*, *], maxlen=2), NoneIsLeaf)',
+    "PyTreeSpec(CustomTreeNode(MyDict[['foo', 'baz']], [CustomTreeNode(MyDict[['c', 'b', 'a']], [*, *, *]), *]), NoneIsLeaf)",
+    'PyTreeSpec(*, NoneIsLeaf)',
+    'PyTreeSpec(CustomNamedTupleSubclass(foo=*, bar=*), NoneIsLeaf)',
+    'PyTreeSpec(CustomTreeNode(MyDataclass[None], [*, *, *, *]), NoneIsLeaf)',
+    'PyTreeSpec(CustomTreeNode(MyOtherDataclass[(11, 13)], [*, *]), NoneIsLeaf)',
+    'PyTreeSpec(CustomTreeNode(MyAnotherDataclass[None], [CustomTreeNode(MyDataclass[None], [*, *, *, *]), *, CustomTreeNode(MyOtherDataclass[(None, 19)], [*, *])]), NoneIsLeaf)',
+    'PyTreeSpec(CustomTreeNode(FlatCache[PyTreeSpec(None)], []), NoneIsLeaf)',
+    'PyTreeSpec(CustomTreeNode(FlatCache[PyTreeSpec(*)], [*]), NoneIsLeaf)',
+    "PyTreeSpec(CustomTreeNode(FlatCache[PyTreeSpec({'a': [*, *]})], [*, *]), NoneIsLeaf)",
+)
+
+TREE_STRINGS = {
+    rustree.NONE_IS_NODE: TREE_STRINGS_NONE_IS_NODE,
+    rustree.NONE_IS_LEAF: TREE_STRINGS_NONE_IS_LEAF,
+}
+
+
+LEAVES = (
+    'foo',
+    0.1,
+    1,
+    object(),
+)
