@@ -1,0 +1,22 @@
+--requirement ../requirements.txt
+
+pytest
+pytest-cov
+covdefaults
+xdoctest
+rich
+
+cpplint
+doc8
+mypy
+pre-commit
+pyenchant
+pylint[spelling]
+ruff
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+attrs
+jax[cpu]
+numpy
+torch

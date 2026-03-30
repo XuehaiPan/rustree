@@ -55,10 +55,10 @@ python-source = "."
 python-packages = ["rustree"]
 module-name = "rustree._rs"
 include = [
-    "/pyproject.toml",
-    "/rustree/**/*.py",
-    "/rustree/**/*.pyi",
-    "/rustree/**/py.typed",
+    "pyproject.toml",
+    "rustree/**/*.py",
+    "rustree/**/*.pyi",
+    "rustree/**/py.typed",
 ]
 bindings = 'pyo3'
 features = ["pyo3/extension-module"]
@@ -102,6 +102,9 @@ format.max-line-length = 120
     "consider-using-from-import",
     "unpacking-non-sequence",
     "unsubscriptable-object",
+    "wrong-import-order",
+    "wrong-spelling-in-comment",
+    "wrong-spelling-in-docstring",
 ]
 "messages control".enable = ["c-extension-no-member"]
 spelling.spelling-dict = "en_US"

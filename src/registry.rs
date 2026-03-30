@@ -13,9 +13,9 @@
 // limitations under the License.
 // =============================================================================
 
+use crate::pytypes::get_rust_module;
 use crate::pytypes::{get_defaultdict, get_deque, get_ordereddict};
 use crate::pytypes::{is_namedtuple_class, is_structseq_class};
-use once_cell::sync::OnceCell;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
@@ -23,7 +23,7 @@ use pyo3::types::*;
 use std::collections::hash_map::Entry as HashMapEntry;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, RwLock};
 
 #[pyclass(eq, eq_int, module = "rustree", rename_all = "UPPERCASE")]
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -39,6 +39,59 @@ pub enum PyTreeKind {
     DefaultDict,
     Deque,
     StructSequence,
+}
+
+impl PyTreeKind {
+    pub(crate) const NUM_KINDS: i32 = 11;
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            PyTreeKind::Custom => "CUSTOM",
+            PyTreeKind::Leaf => "LEAF",
+            PyTreeKind::None => "NONE",
+            PyTreeKind::Tuple => "TUPLE",
+            PyTreeKind::List => "LIST",
+            PyTreeKind::Dict => "DICT",
+            PyTreeKind::NamedTuple => "NAMEDTUPLE",
+            PyTreeKind::OrderedDict => "ORDEREDDICT",
+            PyTreeKind::DefaultDict => "DEFAULTDICT",
+            PyTreeKind::Deque => "DEQUE",
+            PyTreeKind::StructSequence => "STRUCTSEQUENCE",
+        }
+    }
+}
+
+pub fn add_pytree_kind_enum(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let py = m.py();
+    let members = PyDict::new(py);
+    for kind in [
+        PyTreeKind::Custom,
+        PyTreeKind::Leaf,
+        PyTreeKind::None,
+        PyTreeKind::Tuple,
+        PyTreeKind::List,
+        PyTreeKind::Dict,
+        PyTreeKind::NamedTuple,
+        PyTreeKind::OrderedDict,
+        PyTreeKind::DefaultDict,
+        PyTreeKind::Deque,
+        PyTreeKind::StructSequence,
+    ] {
+        members.set_item(kind.name(), kind as i32)?;
+    }
+    let int_enum = py.import("enum")?.getattr("IntEnum")?;
+    let kind_type = int_enum.call1(("PyTreeKind", members))?;
+    kind_type.setattr("NUM_KINDS", PyTreeKind::NUM_KINDS)?;
+    m.add("PyTreeKind", kind_type)?;
+    Ok(())
+}
+
+pub fn pytree_kind_object(py: Python<'_>, kind: PyTreeKind) -> PyResult<Py<PyAny>> {
+    Ok(get_rust_module(py, None)
+        .bind(py)
+        .getattr("PyTreeKind")?
+        .call1((kind as i32,))?
+        .unbind())
 }
 
 #[repr(transparent)]
@@ -69,9 +122,9 @@ impl<T> std::hash::Hash for IdHashedPy<T> {
     }
 }
 
-static mut REGISTRY_NONE_IS_NODE: PyOnceLock<PyTreeTypeRegistry> = PyOnceLock::new();
-static mut REGISTRY_NONE_IS_LEAF: PyOnceLock<PyTreeTypeRegistry> = PyOnceLock::new();
-static mut DICT_INSERTION_ORDERED_NAMESPACES: OnceCell<HashSet<String>> = OnceCell::new();
+static REGISTRY_NONE_IS_NODE: PyOnceLock<RwLock<PyTreeTypeRegistry>> = PyOnceLock::new();
+static REGISTRY_NONE_IS_LEAF: PyOnceLock<RwLock<PyTreeTypeRegistry>> = PyOnceLock::new();
+static DICT_INSERTION_ORDERED_NAMESPACES: OnceLock<RwLock<HashSet<String>>> = OnceLock::new();
 
 pub(crate) struct PyTreeTypeRegistration {
     pub(crate) kind: PyTreeKind,
@@ -88,10 +141,7 @@ pub struct PyTreeTypeRegistry {
 }
 
 impl PyTreeTypeRegistry {
-    fn new(py: Python, none_is_leaf: bool) -> &'static mut Self {
-        static mut REGISTRY_NONE_IS_NODE: GILOnceCell<PyTreeTypeRegistry> = GILOnceCell::new();
-        static mut REGISTRY_NONE_IS_LEAF: GILOnceCell<PyTreeTypeRegistry> = GILOnceCell::new();
-
+    fn new(py: Python<'_>, none_is_leaf: bool) -> RwLock<Self> {
         let init_fn = |none_is_leaf: bool| {
             move || {
                 let mut singleton = PyTreeTypeRegistry {
@@ -132,31 +182,27 @@ impl PyTreeTypeRegistry {
                     .builtin_types
                     .insert(py.get_type::<PyNone>().unbind().into());
 
-                singleton
+                RwLock::new(singleton)
             }
         };
 
-        #[allow(static_mut_refs)]
         match none_is_leaf {
-            false => unsafe { REGISTRY_NONE_IS_NODE.get_or_init(py, init_fn(false)) },
-            true => unsafe { REGISTRY_NONE_IS_LEAF.get_or_init(py, init_fn(true)) },
-        };
-
-        #[allow(static_mut_refs)]
-        match none_is_leaf {
-            false => unsafe { REGISTRY_NONE_IS_NODE.get_mut() }.unwrap(),
-            true => unsafe { REGISTRY_NONE_IS_LEAF.get_mut() }.unwrap(),
+            false => init_fn(false)(),
+            true => init_fn(true)(),
         }
     }
 
     #[inline]
-    fn get_singleton(py: Python, none_is_leaf: bool) -> &'static mut Self {
-        Self::new(py, none_is_leaf)
+    fn get_singleton(py: Python<'_>, none_is_leaf: bool) -> &'static RwLock<Self> {
+        match none_is_leaf {
+            false => REGISTRY_NONE_IS_NODE.get_or_init(py, || Self::new(py, false)),
+            true => REGISTRY_NONE_IS_LEAF.get_or_init(py, || Self::new(py, true)),
+        }
     }
 
     #[inline]
     fn lookup_impl(
-        &'static self,
+        &self,
         obj: &Bound<'_, PyAny>,
         namespace: &str,
     ) -> (PyTreeKind, Option<Arc<PyTreeTypeRegistration>>) {
@@ -187,19 +233,42 @@ impl PyTreeTypeRegistry {
         namespace: Option<&str>,
     ) -> (PyTreeKind, Option<Arc<PyTreeTypeRegistration>>) {
         PyTreeTypeRegistry::get_singleton(obj.py(), none_is_leaf.unwrap_or(false))
+            .read()
+            .unwrap()
             .lookup_impl(obj, namespace.unwrap_or(""))
     }
 
+    #[inline]
+    pub fn lookup_type(
+        cls: &Bound<'_, PyType>,
+        none_is_leaf: Option<bool>,
+        namespace: Option<&str>,
+    ) -> Option<Arc<PyTreeTypeRegistration>> {
+        let namespace = namespace.unwrap_or("");
+        let key = cls.clone().unbind();
+        let registry = PyTreeTypeRegistry::get_singleton(cls.py(), none_is_leaf.unwrap_or(false))
+            .read()
+            .unwrap();
+        if !namespace.is_empty() {
+            if let Some(registration) = registry
+                .named_registrations
+                .get(&(String::from(namespace), cls.clone().unbind().into()))
+            {
+                return Some(registration.clone());
+            }
+        }
+        registry.registrations.get(&key.into()).cloned()
+    }
+
     fn register_impl<'py>(
-        &'static mut self,
-        obj: &Bound<'py, PyAny>,
+        &mut self,
+        cls: &Bound<'py, PyType>,
         flatten_func: &Bound<'py, PyAny>,
         unflatten_func: &Bound<'py, PyAny>,
         path_entry_type: &Bound<'py, PyType>,
         namespace: &str,
     ) -> PyResult<()> {
-        let py = obj.py();
-        let cls = &obj.get_type();
+        let py = cls.py();
         let key = IdHashedPy(cls.clone().unbind());
         if self.builtin_types.contains(&key) {
             return Err(PyValueError::new_err(std::format!(
@@ -329,28 +398,30 @@ impl PyTreeTypeRegistry {
         }
 
         let namespace = namespace.unwrap_or("");
-        PyTreeTypeRegistry::get_singleton(cls.py(), false).register_impl(
-            cls,
-            flatten_func,
-            unflatten_func,
-            path_entry_type,
-            namespace,
-        )?;
-        PyTreeTypeRegistry::get_singleton(cls.py(), true).register_impl(
-            cls,
-            flatten_func,
-            unflatten_func,
-            path_entry_type,
-            namespace,
-        )?;
+        PyTreeTypeRegistry::get_singleton(cls.py(), false)
+            .write()
+            .unwrap()
+            .register_impl(
+                cls,
+                flatten_func,
+                unflatten_func,
+                path_entry_type,
+                namespace,
+            )?;
+        PyTreeTypeRegistry::get_singleton(cls.py(), true)
+            .write()
+            .unwrap()
+            .register_impl(
+                cls,
+                flatten_func,
+                unflatten_func,
+                path_entry_type,
+                namespace,
+            )?;
         Ok(())
     }
 
-    fn unregister_impl(
-        &'static mut self,
-        cls: &Bound<'_, PyType>,
-        namespace: &str,
-    ) -> PyResult<()> {
+    fn unregister_impl(&mut self, cls: &Bound<'_, PyType>, namespace: &str) -> PyResult<()> {
         let py = cls.py();
         let key = IdHashedPy(cls.clone().unbind());
         if self.builtin_types.contains(&key) {
@@ -417,8 +488,14 @@ impl PyTreeTypeRegistry {
     #[inline]
     pub fn unregister(cls: &Bound<'_, PyType>, namespace: Option<&str>) -> PyResult<()> {
         let namespace = namespace.unwrap_or("");
-        PyTreeTypeRegistry::get_singleton(cls.py(), false).unregister_impl(cls, namespace)?;
-        PyTreeTypeRegistry::get_singleton(cls.py(), true).unregister_impl(cls, namespace)?;
+        PyTreeTypeRegistry::get_singleton(cls.py(), false)
+            .write()
+            .unwrap()
+            .unregister_impl(cls, namespace)?;
+        PyTreeTypeRegistry::get_singleton(cls.py(), true)
+            .write()
+            .unwrap()
+            .unregister_impl(cls, namespace)?;
         Ok(())
     }
 
@@ -429,10 +506,10 @@ impl PyTreeTypeRegistry {
     ) -> bool {
         let namespace = namespace.unwrap_or("");
         let inherit_global_namespace = inherit_global_namespace.unwrap_or(true);
-
-        #[allow(static_mut_refs)]
-        let dict_insertion_ordered_namespaces =
-            unsafe { DICT_INSERTION_ORDERED_NAMESPACES.get_or_init(HashSet::new) };
+        let dict_insertion_ordered_namespaces = DICT_INSERTION_ORDERED_NAMESPACES
+            .get_or_init(|| RwLock::new(HashSet::new()))
+            .read()
+            .unwrap();
 
         dict_insertion_ordered_namespaces.contains(namespace)
             || (inherit_global_namespace && dict_insertion_ordered_namespaces.contains(""))
@@ -441,31 +518,16 @@ impl PyTreeTypeRegistry {
     #[inline]
     pub fn set_dict_insertion_ordered(mode: bool, namespace: Option<&str>) {
         let namespace = namespace.unwrap_or("");
-
-        #[allow(static_mut_refs)]
-        unsafe {
-            DICT_INSERTION_ORDERED_NAMESPACES.get_or_init(HashSet::new);
-        }
-
-        #[allow(static_mut_refs)]
-        let dict_insertion_ordered_namespaces =
-            unsafe { DICT_INSERTION_ORDERED_NAMESPACES.get_mut() }.unwrap();
+        let mut dict_insertion_ordered_namespaces = DICT_INSERTION_ORDERED_NAMESPACES
+            .get_or_init(|| RwLock::new(HashSet::new()))
+            .write()
+            .unwrap();
 
         if mode {
             dict_insertion_ordered_namespaces.insert(String::from(namespace));
         } else {
             dict_insertion_ordered_namespaces.remove(namespace);
         }
-    }
-}
-
-impl Drop for PyTreeTypeRegistry {
-    fn drop(&mut self) {
-        Python::attach(|_py| {
-            self.registrations.clear();
-            self.named_registrations.clear();
-            self.builtin_types.clear();
-        })
     }
 }
 
@@ -510,4 +572,33 @@ pub fn is_dict_insertion_ordered(
 #[inline]
 pub fn set_dict_insertion_ordered(mode: bool, namespace: Option<&str>) {
     PyTreeTypeRegistry::set_dict_insertion_ordered(mode, namespace)
+}
+
+#[pyfunction]
+#[pyo3(signature = (namespace=None))]
+pub fn get_registry_size(py: Python<'_>, namespace: Option<&str>) -> PyResult<usize> {
+    let registry = py
+        .import("rustree.registry")?
+        .getattr("_NODETYPE_REGISTRY")?
+        .downcast_into::<PyDict>()?;
+    let namedtuple_factory = py.import("collections")?.getattr("namedtuple")?;
+    let structseq = py.import("rustree.typing")?.getattr("StructSequence")?;
+    let active_namespace = namespace.unwrap_or("");
+
+    let mut total = 0usize;
+    for (key, _) in registry.iter() {
+        if key.eq(&namedtuple_factory)? || key.eq(&structseq)? {
+            continue;
+        }
+        if let Ok(tuple_key) = key.downcast::<PyTuple>() {
+            if tuple_key.len() == 2 {
+                let key_namespace = tuple_key.get_item(0)?.extract::<String>()?;
+                if namespace.is_some() && key_namespace != active_namespace {
+                    continue;
+                }
+            }
+        }
+        total += 1;
+    }
+    Ok(total)
 }

@@ -1,0 +1,1140 @@
+# Copyright 2022-2026 MetaOPT Team. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+# pylint: disable=missing-function-docstring,invalid-name
+
+import dataclasses
+import inspect
+import math
+import re
+import sys
+from collections import OrderedDict
+
+import pytest
+
+import rustree
+from helpers import GLOBAL_NAMESPACE
+
+
+def test_public_api():
+    assert rustree.dataclasses.__all__ == ['DataclassEntry', 'register_node', *dataclasses.__all__]
+    for name in dataclasses.__all__:
+        if name in {'field', 'dataclass', 'make_dataclass'}:
+            assert getattr(rustree.dataclasses, name) != getattr(dataclasses, name)
+        else:
+            assert getattr(rustree.dataclasses, name) is getattr(dataclasses, name)
+    assert rustree.dataclasses.DataclassEntry is rustree.DataclassEntry
+    assert callable(rustree.dataclasses.register_node)
+
+
+def test_same_signature():
+    field_parameters = inspect.signature(rustree.dataclasses.field).parameters.copy()
+    field_original_parameters = inspect.signature(dataclasses.field).parameters.copy()
+    assert len(field_parameters) >= len(field_original_parameters) + 1
+    assert next(reversed(field_parameters)) == 'pytree_node'
+    assert field_parameters['pytree_node'].kind == inspect.Parameter.KEYWORD_ONLY
+    assert field_parameters['pytree_node'].default is None
+    field_parameters.pop('pytree_node')
+    assert OrderedDict(
+        [
+            (name, (param.name, param.kind, param.default))
+            for name, param in field_parameters.items()
+        ][: len(field_original_parameters)],
+    ) == OrderedDict(
+        (name, (param.name, param.kind, param.default))
+        for name, param in field_original_parameters.items()
+    )
+
+    dataclass_parameters = inspect.signature(rustree.dataclasses.dataclass).parameters.copy()
+    dataclass_original_parameters = inspect.signature(dataclasses.dataclass).parameters.copy()
+    assert len(dataclass_parameters) >= len(dataclass_original_parameters) + 1
+    assert next(reversed(dataclass_parameters)) == 'namespace'
+    assert dataclass_parameters['namespace'].kind == inspect.Parameter.KEYWORD_ONLY
+    assert dataclass_parameters['namespace'].default is inspect.Parameter.empty
+    dataclass_parameters.pop('namespace')
+    assert OrderedDict(
+        [
+            (name, (param.name, param.kind, param.default))
+            for name, param in dataclass_parameters.items()
+        ][: len(dataclass_original_parameters)],
+    ) == OrderedDict(
+        (name, (param.name, param.kind, param.default))
+        for name, param in dataclass_original_parameters.items()
+    )
+
+    make_dataclass_parameters = inspect.signature(
+        rustree.dataclasses.make_dataclass,
+    ).parameters.copy()
+    make_dataclass_original_parameters = inspect.signature(
+        dataclasses.make_dataclass,
+    ).parameters.copy()
+    assert len(make_dataclass_parameters) >= len(make_dataclass_original_parameters) + 1
+    assert next(reversed(make_dataclass_parameters)) == 'namespace'
+    assert make_dataclass_parameters['namespace'].kind == inspect.Parameter.KEYWORD_ONLY
+    assert make_dataclass_parameters['namespace'].default is inspect.Parameter.empty
+    make_dataclass_parameters.pop('namespace')
+    assert 'ns' in make_dataclass_parameters
+    assert 'ns' not in make_dataclass_original_parameters
+    assert OrderedDict(
+        [
+            (
+                {'ns': 'namespace'}.get(name, name),
+                ({'ns': 'namespace'}.get(param.name, param.name), param.kind, param.default),
+            )
+            for name, param in make_dataclass_parameters.items()
+        ][: len(make_dataclass_original_parameters)],
+    ) == OrderedDict(
+        (name, (param.name, param.kind, param.default))
+        for name, param in make_dataclass_original_parameters.items()
+    )
+
+
+def test_field_future_parameters():
+    # pylint: disable=invalid-field-call
+    rustree.dataclasses.field()
+    dataclasses.field()
+
+    if sys.version_info >= (3, 10):
+        rustree.dataclasses.field(kw_only=True)
+        dataclasses.field(kw_only=True)
+        rustree.dataclasses.field(kw_only=False)
+        dataclasses.field(kw_only=False)
+    else:
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.field(kw_only=True)
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.field(kw_only=True)
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.field(kw_only=False)
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.field(kw_only=False)
+
+    if sys.version_info >= (3, 14):
+        rustree.dataclasses.field(doc='doc')
+        dataclasses.field(doc='doc')
+        rustree.dataclasses.field(doc=None)
+        dataclasses.field(doc=None)
+    else:
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.field(doc='doc')
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.field(doc='doc')
+        rustree.dataclasses.field(doc=None)
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.field(doc=None)
+
+
+def test_field_with_init():
+    with pytest.raises(
+        TypeError,
+        match=re.escape("field() got an unexpected keyword argument 'pytree_node'"),
+    ):
+        dataclasses.field(pytree_node=True)
+
+    f1 = rustree.dataclasses.field()
+    assert f1.metadata['pytree_node'] is True
+    f2 = rustree.dataclasses.field(pytree_node=False)
+    assert f2.metadata['pytree_node'] is False
+    f3 = rustree.dataclasses.field(pytree_node=True)
+    assert f3.metadata['pytree_node'] is True
+    with pytest.raises(
+        TypeError,
+        match=re.escape('`pytree_node=True` is not allowed for non-init fields.'),
+    ):
+        rustree.dataclasses.field(init=False)
+    f4 = rustree.dataclasses.field(init=False, metadata={'pytree_node': False})
+    assert f4.metadata['pytree_node'] is False
+    with pytest.raises(
+        TypeError,
+        match=re.escape('`pytree_node=True` is not allowed for non-init fields.'),
+    ):
+        rustree.dataclasses.field(init=False, metadata={'pytree_node': True})
+    f5 = rustree.dataclasses.field(init=False, pytree_node=False)
+    assert f5.metadata['pytree_node'] is False
+    with pytest.raises(
+        TypeError,
+        match=re.escape('`pytree_node=True` is not allowed for non-init fields.'),
+    ):
+        rustree.dataclasses.field(init=False, pytree_node=True)
+
+
+def test_dataclass_future_parameters():
+    with pytest.raises(
+        TypeError,
+        match=re.escape("dataclass() missing 1 required keyword-only argument: 'namespace'"),
+    ):
+        rustree.dataclasses.dataclass()
+    rustree.dataclasses.dataclass(namespace='namespace')
+    dataclasses.dataclass()
+
+    if sys.version_info >= (3, 10):
+        rustree.dataclasses.dataclass(match_args=True, namespace='namespace')
+        dataclasses.dataclass(match_args=True)
+        rustree.dataclasses.dataclass(match_args=False, namespace='namespace')
+        dataclasses.dataclass(match_args=False)
+        rustree.dataclasses.dataclass(kw_only=True, namespace='namespace')
+        dataclasses.dataclass(kw_only=True)
+        rustree.dataclasses.dataclass(kw_only=False, namespace='namespace')
+        dataclasses.dataclass(kw_only=False)
+        rustree.dataclasses.dataclass(slots=True, namespace='namespace')
+        dataclasses.dataclass(slots=True)
+        rustree.dataclasses.dataclass(slots=False, namespace='namespace')
+        dataclasses.dataclass(slots=False)
+    else:
+        rustree.dataclasses.dataclass(match_args=True, namespace='namespace')
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.dataclass(match_args=True)
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.dataclass(match_args=False, namespace='error')
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.dataclass(match_args=False)
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.dataclass(kw_only=True, namespace='error')
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.dataclass(kw_only=True)
+        rustree.dataclasses.dataclass(kw_only=False, namespace='namespace')
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.dataclass(kw_only=False)
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.dataclass(slots=True, namespace='error')
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.dataclass(slots=True)
+        rustree.dataclasses.dataclass(slots=False, namespace='namespace')
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.dataclass(slots=False)
+
+    if sys.version_info >= (3, 11):
+        rustree.dataclasses.dataclass(weakref_slot=True, namespace='namespace')
+        dataclasses.dataclass(weakref_slot=True)
+        rustree.dataclasses.dataclass(weakref_slot=False, namespace='namespace')
+        dataclasses.dataclass(weakref_slot=False)
+    else:
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.dataclass(weakref_slot=True, namespace='error')
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.dataclass(weakref_slot=True)
+        rustree.dataclasses.dataclass(weakref_slot=False, namespace='namespace')
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.dataclass(weakref_slot=False)
+
+
+def test_dataclass_with_init():
+    @rustree.dataclasses.dataclass(namespace='namespace')
+    class Foo:
+        a: int
+        b: int = 2
+        c: int = rustree.dataclasses.field(init=False, pytree_node=False)
+        d: float = dataclasses.field(init=True, default=42.0)
+        e: int = dataclasses.field(init=False, metadata={'pytree_node': False})
+        f: float = rustree.dataclasses.field(init=True, default=6.0, metadata={'pytree_node': True})
+        g: int = dataclasses.field(init=True, default=7, metadata={'pytree_node': False})
+
+        def __post_init__(self):
+            self.c = self.a + self.b
+            self.e = self.d * self.f
+
+    foo = Foo(1, d=4.5, f=3.0, g=8)
+    leaves, treespec = rustree.tree_flatten(foo)
+    assert leaves == [foo]
+    assert treespec.is_leaf()
+    leaves, treespec = rustree.tree_flatten(foo, namespace='namespace')
+    assert leaves == [1, 2, 4.5, 3.0]
+    assert foo == rustree.tree_unflatten(treespec, leaves)
+
+    with pytest.raises(
+        TypeError,
+        match=r'PyTree node field .* must be included in `__init__\(\)`\.',
+    ):
+
+        @rustree.dataclasses.dataclass(namespace='error')
+        class Foo1:
+            x: int = dataclasses.field(init=False)
+            y: int = 123
+
+    with pytest.raises(
+        TypeError,
+        match=r'PyTree node field .* must be included in `__init__\(\)`\.',
+    ):
+
+        @rustree.dataclasses.dataclass(namespace='error')
+        class Foo2:
+            x: int = dataclasses.field(init=False, metadata={'pytree_node': True})
+            y: int = 123
+
+    with pytest.raises(
+        TypeError,
+        match=re.escape('`pytree_node=True` is not allowed for non-init fields.'),
+    ):
+
+        @rustree.dataclasses.dataclass(namespace='error')
+        class Foo3:
+            x: int = rustree.dataclasses.field(init=False, pytree_node=True)
+            y: int = 123
+
+
+def test_dataclass_with_non_class():
+    with pytest.raises(
+        TypeError,
+        match=r'@rustree\.dataclasses\.dataclass\(\) can only be used with classes, not .*',
+    ):
+
+        @rustree.dataclasses.dataclass(namespace='error')
+        def foo():
+            pass
+
+    with pytest.raises(
+        TypeError,
+        match=r'@rustree\.dataclasses\.dataclass\(\) can only be used with classes, not .*',
+    ):
+        rustree.dataclasses.dataclass(lambda x: x, namespace='error')
+
+    class Foo:
+        x: int
+        y: float
+
+    rustree.dataclasses.dataclass(Foo, namespace='namespace')
+
+
+def test_dataclass_with_duplicate_registrations():
+    with pytest.raises(
+        TypeError,
+        match=r'@rustree\.dataclasses\.dataclass\(\) cannot be applied to .* more than once\.',
+    ):
+
+        @rustree.dataclasses.dataclass(namespace='error')
+        @rustree.dataclasses.dataclass(namespace='error')
+        class Foo1:
+            x: int
+            y: float
+
+    with pytest.raises(
+        TypeError,
+        match=r'@rustree\.dataclasses\.dataclass\(\) cannot be applied to .* more than once\.',
+    ):
+
+        @rustree.dataclasses.dataclass(namespace='other-error')
+        @rustree.dataclasses.dataclass(namespace='error')
+        class Foo2:
+            x: int
+            y: float
+
+    @rustree.register_pytree_node_class(namespace='other-namespace')
+    @rustree.dataclasses.dataclass(namespace='namespace')
+    class Foo:
+        x: int
+        y: float
+
+        def __tree_flatten__(self):
+            return [self.y], self.x, ['y']
+
+        @classmethod
+        def __tree_unflatten__(cls, metadata, children):
+            return cls(metadata, children[0])
+
+    foo = Foo(1, 2.0)
+    accessors1, leaves1, treespec1 = rustree.tree_flatten_with_accessor(foo)
+    assert rustree.tree_unflatten(treespec1, leaves1) == foo
+    assert accessors1 == [rustree.PyTreeAccessor()]
+    assert leaves1 == [foo]
+    assert treespec1.namespace == ''
+    assert treespec1.is_leaf()
+    assert treespec1.kind == rustree.PyTreeKind.LEAF
+    assert treespec1.type is None
+    accessors2, leaves2, treespec2 = rustree.tree_flatten_with_accessor(foo, namespace='namespace')
+    assert rustree.tree_unflatten(treespec2, leaves2) == foo
+    assert accessors2 == [
+        rustree.PyTreeAccessor((rustree.DataclassEntry('x', Foo, rustree.PyTreeKind.CUSTOM),)),
+        rustree.PyTreeAccessor((rustree.DataclassEntry('y', Foo, rustree.PyTreeKind.CUSTOM),)),
+    ]
+    assert [a(foo) for a in accessors2] == [1, 2.0]
+    assert leaves2 == [1, 2.0]
+    assert treespec2.namespace == 'namespace'
+    assert treespec2.kind == rustree.PyTreeKind.CUSTOM
+    assert treespec2.type is Foo
+    (
+        accessors3,
+        leaves3,
+        treespec3,
+    ) = rustree.tree_flatten_with_accessor(foo, namespace='other-namespace')
+    assert rustree.tree_unflatten(treespec3, leaves3) == foo
+    assert accessors3 == [
+        rustree.PyTreeAccessor((rustree.DataclassEntry('y', Foo, rustree.PyTreeKind.CUSTOM),)),
+    ]
+    assert [a(foo) for a in accessors3] == [2.0]
+    assert leaves3 == [2.0]
+    assert treespec3.namespace == 'other-namespace'
+    assert treespec3.kind == rustree.PyTreeKind.CUSTOM
+    assert treespec3.type is Foo
+
+
+def test_dataclass_with_invalid_namespace():
+    with pytest.raises(TypeError, match='The namespace must be a string'):
+
+        @rustree.dataclasses.dataclass(namespace=1)
+        class Foo1:
+            x: int
+            y: float
+
+    @rustree.dataclasses.dataclass(namespace='')
+    class Foo2:
+        x: int
+        y: float
+
+    foo = Foo2(1, 2.0)
+    accessors, leaves, treespec = rustree.tree_flatten_with_accessor(foo)
+    assert rustree.tree_unflatten(treespec, leaves) == foo
+    assert accessors == [
+        rustree.PyTreeAccessor((rustree.DataclassEntry('x', Foo2, rustree.PyTreeKind.CUSTOM),)),
+        rustree.PyTreeAccessor((rustree.DataclassEntry('y', Foo2, rustree.PyTreeKind.CUSTOM),)),
+    ]
+    assert [a(foo) for a in accessors] == [1, 2.0]
+    assert leaves == [1, 2.0]
+    assert treespec.namespace == ''
+    assert treespec.kind == rustree.PyTreeKind.CUSTOM
+    assert treespec.type is Foo2
+
+    @rustree.dataclasses.dataclass(namespace=GLOBAL_NAMESPACE)
+    class Foo3:
+        x: int
+        y: float
+
+    foo = Foo3(1, 2.0)
+    accessors, leaves, treespec = rustree.tree_flatten_with_accessor(foo)
+    assert rustree.tree_unflatten(treespec, leaves) == foo
+    assert accessors == [
+        rustree.PyTreeAccessor((rustree.DataclassEntry('x', Foo3, rustree.PyTreeKind.CUSTOM),)),
+        rustree.PyTreeAccessor((rustree.DataclassEntry('y', Foo3, rustree.PyTreeKind.CUSTOM),)),
+    ]
+    assert [a(foo) for a in accessors] == [1, 2.0]
+    assert leaves == [1, 2.0]
+    assert treespec.namespace == ''
+    assert treespec.kind == rustree.PyTreeKind.CUSTOM
+    assert treespec.type is Foo3
+
+
+def test_make_dataclass_future_parameters():
+    with pytest.raises(
+        TypeError,
+        match=re.escape("make_dataclass() missing 1 required keyword-only argument: 'namespace'"),
+    ):
+        rustree.dataclasses.make_dataclass('Foo1', ['x', ('y', int), ('z', float, 0.0)])
+    with pytest.raises(
+        TypeError,
+        match=re.escape("make_dataclass() missing 1 required keyword-only argument: 'ns'"),
+    ):
+        rustree.dataclasses.make_dataclass(
+            'Foo1',
+            ['x', ('y', int), ('z', float, 0.0)],
+            namespace={
+                'norm': lambda self: math.hypot(self.x, self.y, self.z),
+            },
+        )
+
+    if sys.version_info >= (3, 10):
+        rustree.dataclasses.make_dataclass(
+            'Foo2',
+            ['x', ('y', int), ('z', float, 0.0)],
+            match_args=True,
+            namespace='namespace',
+        )
+        dataclasses.make_dataclass(
+            'Foo3',
+            ['x', ('y', int), ('z', float, 0.0)],
+            match_args=True,
+        )
+        rustree.dataclasses.make_dataclass(
+            'Foo4',
+            ['x', ('y', int), ('z', float, 0.0)],
+            match_args=False,
+            namespace='namespace',
+        )
+        dataclasses.make_dataclass(
+            'Foo5',
+            ['x', ('y', int), ('z', float, 0.0)],
+            match_args=False,
+        )
+        rustree.dataclasses.make_dataclass(
+            'Foo6',
+            ['x', ('y', int), ('z', float, 0.0)],
+            kw_only=True,
+            namespace='namespace',
+        )
+        dataclasses.make_dataclass(
+            'Foo7',
+            ['x', ('y', int), ('z', float, 0.0)],
+            kw_only=True,
+        )
+        rustree.dataclasses.make_dataclass(
+            'Foo8',
+            ['x', ('y', int), ('z', float, 0.0)],
+            kw_only=False,
+            namespace='namespace',
+        )
+        dataclasses.make_dataclass(
+            'Foo9',
+            ['x', ('y', int), ('z', float, 0.0)],
+            kw_only=False,
+        )
+        rustree.dataclasses.make_dataclass(
+            'Foo10',
+            ['x', ('y', int), ('z', float, 0.0)],
+            slots=True,
+            namespace='namespace',
+        )
+        dataclasses.make_dataclass(
+            'Foo11',
+            ['x', ('y', int), ('z', float, 0.0)],
+            slots=True,
+        )
+        rustree.dataclasses.make_dataclass(
+            'Foo12',
+            ['x', ('y', int), ('z', float, 0.0)],
+            slots=False,
+            namespace='namespace',
+        )
+        dataclasses.make_dataclass(
+            'Foo13',
+            ['x', ('y', int), ('z', float, 0.0)],
+            slots=False,
+        )
+    else:
+        rustree.dataclasses.make_dataclass(
+            'Foo2',
+            ['x', ('y', int), ('z', float, 0.0)],
+            match_args=True,
+            namespace='namespace',
+        )
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.make_dataclass(
+                'Foo3',
+                ['x', ('y', int), ('z', float, 0.0)],
+                match_args=True,
+            )
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.make_dataclass(
+                'Foo4',
+                ['x', ('y', int), ('z', float, 0.0)],
+                match_args=False,
+                namespace='error',
+            )
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.make_dataclass(
+                'Foo5',
+                ['x', ('y', int), ('z', float, 0.0)],
+                match_args=False,
+            )
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.make_dataclass(
+                'Foo6',
+                ['x', ('y', int), ('z', float, 0.0)],
+                kw_only=True,
+                namespace='error',
+            )
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.make_dataclass(
+                'Foo7',
+                ['x', ('y', int), ('z', float, 0.0)],
+                kw_only=True,
+            )
+        rustree.dataclasses.make_dataclass(
+            'Foo8',
+            ['x', ('y', int), ('z', float, 0.0)],
+            kw_only=False,
+            namespace='namespace',
+        )
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.make_dataclass(
+                'Foo9',
+                ['x', ('y', int), ('z', float, 0.0)],
+                kw_only=False,
+            )
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.make_dataclass(
+                'Foo10',
+                ['x', ('y', int), ('z', float, 0.0)],
+                slots=True,
+                namespace='error',
+            )
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.make_dataclass(
+                'Foo11',
+                ['x', ('y', int), ('z', float, 0.0)],
+                slots=True,
+            )
+        rustree.dataclasses.make_dataclass(
+            'Foo12',
+            ['x', ('y', int), ('z', float, 0.0)],
+            slots=False,
+            namespace='namespace',
+        )
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.make_dataclass(
+                'Foo13',
+                ['x', ('y', int), ('z', float, 0.0)],
+                slots=False,
+            )
+
+    if sys.version_info >= (3, 11):
+        rustree.dataclasses.make_dataclass(
+            'Foo14',
+            ['x', ('y', int), ('z', float, 0.0)],
+            slots=True,
+            weakref_slot=True,
+            namespace='namespace',
+        )
+        dataclasses.make_dataclass(
+            'Foo15',
+            ['x', ('y', int), ('z', float, 0.0)],
+            slots=True,
+            weakref_slot=True,
+        )
+        rustree.dataclasses.make_dataclass(
+            'Foo16',
+            ['x', ('y', int), ('z', float, 0.0)],
+            weakref_slot=False,
+            namespace='namespace',
+        )
+        dataclasses.make_dataclass(
+            'Foo17',
+            ['x', ('y', int), ('z', float, 0.0)],
+            weakref_slot=False,
+        )
+    else:
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.make_dataclass(
+                'Foo14',
+                ['x', ('y', int), ('z', float, 0.0)],
+                weakref_slot=True,
+                namespace='error',
+            )
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.make_dataclass(
+                'Foo15',
+                ['x', ('y', int), ('z', float, 0.0)],
+                weakref_slot=True,
+            )
+        rustree.dataclasses.make_dataclass(
+            'Foo16',
+            ['x', ('y', int), ('z', float, 0.0)],
+            weakref_slot=False,
+            namespace='namespace',
+        )
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.make_dataclass(
+                'Foo17',
+                ['x', ('y', int), ('z', float, 0.0)],
+                weakref_slot=False,
+            )
+
+    if sys.version_info >= (3, 12):
+        assert (
+            rustree.dataclasses.make_dataclass(
+                'Foo18',
+                ['x', ('y', int), ('z', float, 0.0)],
+                namespace='namespace',
+            ).__module__
+            == __name__
+        )
+        assert (
+            dataclasses.make_dataclass(
+                'Foo19',
+                ['x', ('y', int), ('z', float, 0.0)],
+            ).__module__
+            == __name__
+        )
+        assert (
+            rustree.dataclasses.make_dataclass(
+                'Foo20',
+                ['x', ('y', int), ('z', float, 0.0)],
+                module='some.module',
+                namespace='namespace',
+            ).__module__
+            == 'some.module'
+        )
+        assert (
+            dataclasses.make_dataclass(
+                'Foo21',
+                ['x', ('y', int), ('z', float, 0.0)],
+                module='some.module',
+            ).__module__
+            == 'some.module'
+        )
+    else:
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.make_dataclass(
+                'Foo20',
+                ['x', ('y', int), ('z', float, 0.0)],
+                module='some.module',
+                namespace='error',
+            )
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.make_dataclass(
+                'Foo21',
+                ['x', ('y', int), ('z', float, 0.0)],
+                module='some.module',
+            )
+
+    # Python 3.14 added a new parameter `decorator` to `dataclasses.make_dataclass`
+    Foo22 = rustree.dataclasses.make_dataclass(  # noqa: N806
+        'Foo22',
+        ['x', ('y', int), ('z', float, 0.0)],
+        decorator=dataclasses.dataclass,
+        namespace='namespace',
+    )
+    assert isinstance(getattr(Foo22, '__rustree_dataclass_fields__', None), tuple)
+    assert dataclasses.is_dataclass(Foo22)
+    if sys.version_info >= (3, 14):
+        Foo23 = rustree.dataclasses.make_dataclass(  # noqa: N806
+            'Foo23',
+            ['x', ('y', int), ('z', float, 0.0)],
+            decorator=rustree.dataclasses.dataclass,
+            namespace='namespace',
+        )
+        assert isinstance(getattr(Foo23, '__rustree_dataclass_fields__', None), tuple)
+        assert dataclasses.is_dataclass(Foo23)
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.make_dataclass(
+                'Foo24',
+                ['x', ('y', int), ('z', float, 0.0)],
+                decorator=rustree.dataclasses.dataclass(namespace='namespace'),
+                namespace='namespace',
+            )
+        Foo24 = dataclasses.make_dataclass(  # noqa: N806
+            'Foo25',
+            ['x', ('y', int), ('z', float, 0.0)],
+            decorator=dataclasses.dataclass,
+        )
+        assert dataclasses.is_dataclass(Foo24)
+    else:
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.make_dataclass(
+                'Foo23',
+                ['x', ('y', int), ('z', float, 0.0)],
+                decorator=rustree.dataclasses.dataclass,
+                namespace='error',
+            )
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            rustree.dataclasses.make_dataclass(
+                'Foo23',
+                ['x', ('y', int), ('z', float, 0.0)],
+                decorator=rustree.dataclasses.dataclass(namespace='error'),
+                namespace='error',
+            )
+        with pytest.raises(TypeError, match='got an unexpected keyword argument'):
+            dataclasses.make_dataclass(
+                'Foo24',
+                ['x', ('y', int), ('z', float, 0.0)],
+                decorator=dataclasses.dataclass,
+            )
+
+
+def test_make_dataclass_with_duplicate_registrations():
+    Foo1 = rustree.dataclasses.make_dataclass(  # noqa: N806
+        'Foo1',
+        [('x', int), ('y', float)],
+        namespace='error',
+    )
+    with pytest.raises(
+        TypeError,
+        match=r'@rustree\.dataclasses\.dataclass\(\) cannot be applied to .* more than once\.',
+    ):
+        rustree.dataclasses.dataclass(Foo1, namespace='error')
+
+    Foo2 = rustree.dataclasses.make_dataclass(  # noqa: N806
+        'Foo2',
+        [('x', int), ('y', float)],
+        namespace='error',
+    )
+    with pytest.raises(
+        TypeError,
+        match=r'@rustree\.dataclasses\.dataclass\(\) cannot be applied to .* more than once\.',
+    ):
+        rustree.dataclasses.dataclass(Foo2, namespace='other-error')
+
+    Foo = rustree.register_pytree_node_class(namespace='other-namespace')(  # noqa: N806
+        rustree.dataclasses.make_dataclass(
+            'Foo',
+            [('x', int), ('y', float)],
+            ns={
+                'tree_flatten': lambda self: ([self.y], self.x, ['y']),
+                'tree_unflatten': classmethod(
+                    lambda cls, metadata, children: cls(metadata, children[0]),
+                ),
+            },
+            namespace='namespace',
+        ),
+    )
+
+    foo = Foo(1, 2.0)
+    accessors1, leaves1, treespec1 = rustree.tree_flatten_with_accessor(foo)
+    assert rustree.tree_unflatten(treespec1, leaves1) == foo
+    assert accessors1 == [rustree.PyTreeAccessor()]
+    assert leaves1 == [foo]
+    assert treespec1.namespace == ''
+    assert treespec1.is_leaf()
+    assert treespec1.kind == rustree.PyTreeKind.LEAF
+    assert treespec1.type is None
+    accessors2, leaves2, treespec2 = rustree.tree_flatten_with_accessor(foo, namespace='namespace')
+    assert rustree.tree_unflatten(treespec2, leaves2) == foo
+    assert accessors2 == [
+        rustree.PyTreeAccessor((rustree.DataclassEntry('x', Foo, rustree.PyTreeKind.CUSTOM),)),
+        rustree.PyTreeAccessor((rustree.DataclassEntry('y', Foo, rustree.PyTreeKind.CUSTOM),)),
+    ]
+    assert [a(foo) for a in accessors2] == [1, 2.0]
+    assert leaves2 == [1, 2.0]
+    assert treespec2.namespace == 'namespace'
+    assert treespec2.kind == rustree.PyTreeKind.CUSTOM
+    assert treespec2.type is Foo
+    (
+        accessors3,
+        leaves3,
+        treespec3,
+    ) = rustree.tree_flatten_with_accessor(foo, namespace='other-namespace')
+    assert rustree.tree_unflatten(treespec3, leaves3) == foo
+    assert accessors3 == [
+        rustree.PyTreeAccessor((rustree.DataclassEntry('y', Foo, rustree.PyTreeKind.CUSTOM),)),
+    ]
+    assert [a(foo) for a in accessors3] == [2.0]
+    assert leaves3 == [2.0]
+    assert treespec3.namespace == 'other-namespace'
+    assert treespec3.kind == rustree.PyTreeKind.CUSTOM
+    assert treespec3.type is Foo
+
+
+def test_make_dataclass_with_invalid_namespace():
+    with pytest.raises(TypeError, match='The namespace must be a string'):
+        rustree.dataclasses.make_dataclass(
+            'Foo1',
+            ['x', ('y', int), ('z', float, 0.0)],
+            namespace=1,
+        )
+
+    Foo2 = rustree.dataclasses.make_dataclass(  # noqa: N806
+        'Foo2',
+        [('x', int), ('y', float)],
+        namespace='',
+    )
+    foo = Foo2(1, 2.0)
+    accessors, leaves, treespec = rustree.tree_flatten_with_accessor(foo)
+    assert rustree.tree_unflatten(treespec, leaves) == foo
+    assert accessors == [
+        rustree.PyTreeAccessor((rustree.DataclassEntry('x', Foo2, rustree.PyTreeKind.CUSTOM),)),
+        rustree.PyTreeAccessor((rustree.DataclassEntry('y', Foo2, rustree.PyTreeKind.CUSTOM),)),
+    ]
+    assert [a(foo) for a in accessors] == [1, 2.0]
+    assert leaves == [1, 2.0]
+    assert treespec.namespace == ''
+    assert treespec.kind == rustree.PyTreeKind.CUSTOM
+    assert treespec.type is Foo2
+
+    Foo3 = rustree.dataclasses.make_dataclass(  # noqa: N806
+        'Foo3',
+        [('x', int), ('y', float)],
+        namespace=GLOBAL_NAMESPACE,
+    )
+    foo = Foo3(1, 2.0)
+    accessors, leaves, treespec = rustree.tree_flatten_with_accessor(foo)
+    assert rustree.tree_unflatten(treespec, leaves) == foo
+    assert accessors == [
+        rustree.PyTreeAccessor((rustree.DataclassEntry('x', Foo3, rustree.PyTreeKind.CUSTOM),)),
+        rustree.PyTreeAccessor((rustree.DataclassEntry('y', Foo3, rustree.PyTreeKind.CUSTOM),)),
+    ]
+    assert [a(foo) for a in accessors] == [1, 2.0]
+    assert leaves == [1, 2.0]
+    assert treespec.namespace == ''
+    assert treespec.kind == rustree.PyTreeKind.CUSTOM
+    assert treespec.type is Foo3
+
+    with pytest.raises(TypeError, match='The namespace must be a string'):
+        rustree.dataclasses.make_dataclass(
+            'Bar1',
+            ['x', ('y', int), ('z', float, 0.0)],
+            ns=1,
+            namespace=None,
+        )
+
+    Bar2 = rustree.dataclasses.make_dataclass(  # noqa: N806
+        'Bar2',
+        [('x', int), ('y', float)],
+        ns='',
+        namespace={},
+    )
+    bar = Bar2(1, 2.0)
+    accessors, leaves, treespec = rustree.tree_flatten_with_accessor(bar)
+    assert rustree.tree_unflatten(treespec, leaves) == bar
+    assert accessors == [
+        rustree.PyTreeAccessor((rustree.DataclassEntry('x', Bar2, rustree.PyTreeKind.CUSTOM),)),
+        rustree.PyTreeAccessor((rustree.DataclassEntry('y', Bar2, rustree.PyTreeKind.CUSTOM),)),
+    ]
+    assert [a(bar) for a in accessors] == [1, 2.0]
+    assert leaves == [1, 2.0]
+    assert treespec.namespace == ''
+    assert treespec.kind == rustree.PyTreeKind.CUSTOM
+    assert treespec.type is Bar2
+
+    Bar3 = rustree.dataclasses.make_dataclass(  # noqa: N806
+        'Bar3',
+        [('x', int), ('y', float)],
+        ns=GLOBAL_NAMESPACE,
+        namespace={},
+    )
+    bar = Bar3(1, 2.0)
+    accessors, leaves, treespec = rustree.tree_flatten_with_accessor(bar)
+    assert rustree.tree_unflatten(treespec, leaves) == bar
+    assert accessors == [
+        rustree.PyTreeAccessor((rustree.DataclassEntry('x', Bar3, rustree.PyTreeKind.CUSTOM),)),
+        rustree.PyTreeAccessor((rustree.DataclassEntry('y', Bar3, rustree.PyTreeKind.CUSTOM),)),
+    ]
+    assert [a(bar) for a in accessors] == [1, 2.0]
+    assert leaves == [1, 2.0]
+    assert treespec.namespace == ''
+    assert treespec.kind == rustree.PyTreeKind.CUSTOM
+    assert treespec.type is Bar3
+
+
+def test_register_existing_class():
+    @dataclasses.dataclass
+    class Existing:
+        x: float
+        y: float
+
+    rustree.dataclasses.register_node(Existing, namespace='test-dc-register')
+
+    obj = Existing(1.0, 2.0)
+    leaves, treespec = rustree.tree_flatten(obj, namespace='test-dc-register')
+    assert leaves == [1.0, 2.0]
+    assert obj == rustree.tree_unflatten(treespec, leaves)
+
+
+def test_register_existing_class_with_metadata():
+    @dataclasses.dataclass
+    class ExistingMixed:
+        a: int
+        b: int = dataclasses.field(metadata={'pytree_node': False})
+        c: int = dataclasses.field(init=False, metadata={'pytree_node': False})
+
+        def __post_init__(self):
+            self.c = self.a + self.b
+
+    rustree.dataclasses.register_node(ExistingMixed, namespace='test-dc-register-meta')
+
+    obj = ExistingMixed(1, 2)
+    leaves, treespec = rustree.tree_flatten(obj, namespace='test-dc-register-meta')
+    assert leaves == [1]
+    assert obj == rustree.tree_unflatten(treespec, leaves)
+
+
+def test_register_non_class():
+    with pytest.raises(TypeError, match='Expected a class'):
+        rustree.dataclasses.register_node(42, namespace='error')
+
+
+def test_register_non_dataclass():
+    class NotDataclass:
+        pass
+
+    with pytest.raises(TypeError, match='is not a dataclass'):
+        rustree.dataclasses.register_node(NotDataclass, namespace='error')
+
+
+def test_register_double_registration():
+    @dataclasses.dataclass
+    class Double:
+        x: int
+
+    rustree.dataclasses.register_node(Double, namespace='test-dc-double')
+
+    with pytest.raises(
+        TypeError,
+        match=r'Cannot register .* as a pytree node more than once\.',
+    ):
+        rustree.dataclasses.register_node(Double, namespace='test-dc-double-2')
+
+
+def test_register_init_false_class_warns():
+    @dataclasses.dataclass(init=False)
+    class InitFalse:
+        x: int
+        y: int
+
+    with pytest.warns(
+        UserWarning,
+        match=re.escape(
+            "Dataclass 'InitFalse' was defined with `init=False`. "
+            '`tree_unflatten()` may fail because '
+            '`rustree.dataclasses.register_node()` reconstructs instances with `cls(**kwargs)`.',
+        ),
+    ):
+        rustree.dataclasses.register_node(InitFalse, namespace='test-dc-init-false')
+
+
+def test_register_init_false_field():
+    @dataclasses.dataclass
+    class BadInit:
+        x: int = dataclasses.field(init=False, metadata={'pytree_node': True})
+        y: int = 123
+
+    with pytest.raises(
+        TypeError,
+        match=r'PyTree node field .* must be included in `__init__\(\)`\.',
+    ):
+        rustree.dataclasses.register_node(BadInit, namespace='error')
+
+
+def test_register_invalid_namespace():
+    @dataclasses.dataclass
+    class Foo1:
+        x: int
+
+    with pytest.raises(TypeError, match='The namespace must be a string'):
+        rustree.dataclasses.register_node(Foo1, namespace=1)
+
+    @dataclasses.dataclass
+    class Foo2:
+        x: int
+        y: float
+
+    rustree.dataclasses.register_node(Foo2, namespace='')
+
+    foo = Foo2(1, 2.0)
+    leaves, treespec = rustree.tree_flatten(foo)
+    assert leaves == [1, 2.0]
+    assert foo == rustree.tree_unflatten(treespec, leaves)
+
+    @dataclasses.dataclass
+    class Foo3:
+        x: int
+        y: float
+
+    rustree.dataclasses.register_node(Foo3, namespace=GLOBAL_NAMESPACE)
+
+    foo = Foo3(1, 2.0)
+    leaves, treespec = rustree.tree_flatten(foo)
+    assert leaves == [1, 2.0]
+    assert foo == rustree.tree_unflatten(treespec, leaves)
+
+
+def test_register_accessor_support():
+    @dataclasses.dataclass
+    class AccessorTest:
+        x: int
+        y: float
+
+    rustree.dataclasses.register_node(AccessorTest, namespace='test-dc-register-accessor')
+
+    obj = AccessorTest(1, 2.0)
+    accessors, leaves, treespec = rustree.tree_flatten_with_accessor(
+        obj,
+        namespace='test-dc-register-accessor',
+    )
+    assert leaves == [1, 2.0]
+    assert len(accessors) == 2
+    assert accessors == [
+        rustree.PyTreeAccessor(
+            (rustree.DataclassEntry('x', AccessorTest, rustree.PyTreeKind.CUSTOM),),
+        ),
+        rustree.PyTreeAccessor(
+            (rustree.DataclassEntry('y', AccessorTest, rustree.PyTreeKind.CUSTOM),),
+        ),
+    ]
+    assert [a(obj) for a in accessors] == [1, 2.0]
+    assert treespec.kind == rustree.PyTreeKind.CUSTOM
+    assert treespec.type is AccessorTest
+
+
+def test_register_as_decorator():
+    @rustree.dataclasses.register_node(namespace='test-dc-register-dec')
+    @dataclasses.dataclass
+    class DecoratorTest:
+        x: float
+        y: float
+
+    obj = DecoratorTest(3.0, 4.0)
+    leaves, treespec = rustree.tree_flatten(obj, namespace='test-dc-register-dec')
+    assert leaves == [3.0, 4.0]
+    assert obj == rustree.tree_unflatten(treespec, leaves)
+
+
+def test_register_as_decorator_with_metadata():
+    @rustree.dataclasses.register_node(namespace='test-dc-register-dec-meta')
+    @dataclasses.dataclass
+    class DecoratorMixed:
+        a: int
+        b: int = dataclasses.field(metadata={'pytree_node': False})
+
+    obj = DecoratorMixed(10, 20)
+    leaves, treespec = rustree.tree_flatten(obj, namespace='test-dc-register-dec-meta')
+    assert leaves == [10]
+    assert obj == rustree.tree_unflatten(treespec, leaves)
+
+
+def test_register_namespace_as_positional():
+    @rustree.dataclasses.register_node('test-dc-register-pos')
+    @dataclasses.dataclass
+    class PosNsTest:
+        x: int
+
+    obj = PosNsTest(42)
+    leaves, treespec = rustree.tree_flatten(obj, namespace='test-dc-register-pos')
+    assert leaves == [42]
+    assert obj == rustree.tree_unflatten(treespec, leaves)
+
+
+def test_register_namespace_as_positional_with_kwarg_error():
+    with pytest.raises(
+        ValueError,
+        match=r'Cannot specify `namespace` when the first argument is a string\.',
+    ):
+        rustree.dataclasses.register_node('ns1', namespace='ns2')
+
+
+def test_register_namespace_empty_string_as_positional():
+    with pytest.raises(
+        ValueError,
+        match=r'The namespace cannot be an empty string\.',
+    ):
+        rustree.dataclasses.register_node('')
+
+
+def test_register_missing_namespace():
+    @dataclasses.dataclass
+    class MissingNs:
+        x: int
+
+    with pytest.raises(
+        ValueError,
+        match=r'Must specify `namespace` when the first argument is a class\.',
+    ):
+        rustree.dataclasses.register_node(MissingNs)
+
+
+def test_dataclass_entry():
+    @dataclasses.dataclass
+    class EntryTest:
+        x: int
+        y: float
+        z: int = dataclasses.field(init=False, default=0)
+
+    entry_str = rustree.DataclassEntry('x', EntryTest, rustree.PyTreeKind.CUSTOM)
+    assert entry_str.field == 'x'
+    assert entry_str.name == 'x'
+    assert entry_str.fields == ('x', 'y', 'z')
+    assert entry_str.init_fields == ('x', 'y')
+    assert 'DataclassEntry' in repr(entry_str)
+    assert "'x'" in repr(entry_str)
+
+    entry_int = rustree.DataclassEntry(1, EntryTest, rustree.PyTreeKind.CUSTOM)
+    assert entry_int.field == 'y'
+    assert entry_int.name == 'y'

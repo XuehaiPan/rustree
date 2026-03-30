@@ -1,4 +1,4 @@
-# Copyright 2024-2025 Xuehai Pan. All Rights Reserved.
+# Copyright 2022-2026 MetaOPT Team. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Typing utilities for RusTree."""
+"""Typing utilities for OpTree."""
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ from typing_extensions import (
 )
 from weakref import WeakKeyDictionary
 
-import rustree._rs as _rs
+from rustree import _rs
 from rustree._rs import PyTreeKind, PyTreeSpec
 from rustree.accessors import (
     AutoEntry,
@@ -82,6 +82,7 @@ from rustree.accessors import (
 
 __all__ = [
     'PyTreeSpec',
+    'PyTreeDef',
     'PyTreeKind',
     'PyTree',
     'PyTreeTypeVar',
@@ -129,6 +130,8 @@ __all__ = [
 ]
 
 
+PyTreeDef: TypeAlias = PyTreeSpec  # alias
+
 T = TypeVar('T')
 S = TypeVar('S')
 U = TypeVar('U')
@@ -143,10 +146,10 @@ MetaData: TypeAlias = Optional[Hashable]
 
 
 @runtime_checkable
-class CustomTreeNode(Protocol[T]):
+class CustomTreeNode(Protocol[T]):  # pylint: disable=too-few-public-methods
     """The abstract base class for custom pytree nodes."""
 
-    def tree_flatten(
+    def __tree_flatten__(
         self,
         /,
     ) -> (
@@ -159,7 +162,7 @@ class CustomTreeNode(Protocol[T]):
         """Flatten the custom pytree node into children and metadata."""
 
     @classmethod
-    def tree_unflatten(cls, metadata: MetaData, children: Children[T], /) -> Self:
+    def __tree_unflatten__(cls, metadata: MetaData, children: Children[T], /) -> Self:
         """Unflatten the children and metadata into the custom pytree node."""
 
 
@@ -167,7 +170,7 @@ _UnionType = type(Union[int, str])
 
 
 try:  # pragma: no cover
-    from typing import _tp_cache  # type: ignore[attr-defined]
+    from typing import _tp_cache  # type: ignore[attr-defined] # pylint: disable=ungrouped-imports
 except ImportError:  # pragma: no cover
 
     def _tp_cache(func: Callable[P, T], /) -> Callable[P, T]:
@@ -208,7 +211,7 @@ class PyTree(Generic[T]):  # pragma: no cover
     __instance_lock__: ClassVar[threading.Lock] = threading.Lock()
 
     @_tp_cache
-    def __class_getitem__(  # noqa: C901
+    def __class_getitem__(  # noqa: C901 # pylint: disable=too-many-branches
         cls,
         item: (
             type[T]
@@ -287,7 +290,7 @@ class PyTree(Generic[T]):  # pragma: no cover
         """Emulate dataclass-like behavior."""
         raise NotImplementedError
 
-    def __contains__(self, key: Any | T, /) -> bool:
+    def __contains__(self, key: Any, /) -> bool:
         """Emulate collection-like behavior."""
         raise NotImplementedError
 
@@ -299,15 +302,15 @@ class PyTree(Generic[T]):  # pragma: no cover
         """Emulate collection-like behavior."""
         raise NotImplementedError
 
-    def index(self, key: Any | T, /) -> int:
+    def index(self, key: Any, /) -> int:
         """Emulate sequence-like behavior."""
         raise NotImplementedError
 
-    def count(self, key: Any | T, /) -> int:
+    def count(self, key: Any, /) -> int:
         """Emulate sequence-like behavior."""
         raise NotImplementedError
 
-    def get(self, key: Any, /, default: T | None = None) -> T | None:
+    def get(self, key: Any, /, default: S | None = None) -> PyTree[T] | T | S | None:
         """Emulate mapping-like behavior."""
         raise NotImplementedError
 
@@ -372,7 +375,7 @@ class UnflattenFunc(Protocol[T]):  # pylint: disable=too-few-public-methods
 
 
 def _override_with_(
-    rust_implementation: Callable[P, T],
+    cxx_implementation: Callable[P, T],
     /,
 ) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """Decorator to override the Python implementation with the C++ implementation.
@@ -391,9 +394,9 @@ def _override_with_(
     def wrapper(python_implementation: Callable[P, T], /) -> Callable[P, T]:
         @functools.wraps(python_implementation)
         def wrapped(*args: P.args, **kwargs: P.kwargs) -> T:
-            return rust_implementation(*args, **kwargs)
+            return cxx_implementation(*args, **kwargs)
 
-        wrapped.__rust_implementation__ = rust_implementation  # type: ignore[attr-defined]
+        wrapped.__rust_implementation__ = cxx_implementation  # type: ignore[attr-defined]
         wrapped.__python_implementation__ = python_implementation  # type: ignore[attr-defined]
 
         return wrapped
@@ -499,7 +502,7 @@ class StructSequence(tuple[_T_co, ...], metaclass=StructSequenceMeta):
         raise NotImplementedError
 
 
-structseq: TypeAlias = StructSequence  # noqa: PYI042
+structseq: TypeAlias = StructSequence  # noqa: PYI042 # pylint: disable=invalid-name
 
 del StructSequenceMeta
 
@@ -518,7 +521,7 @@ def is_structseq_instance(obj: object, /) -> bool:
 
 
 # Set if the type allows subclassing (see CPython's Include/object.h)
-Py_TPFLAGS_BASETYPE: int = _rs.Py_TPFLAGS_BASETYPE  # (1UL << 10)
+Py_TPFLAGS_BASETYPE: int = _rs.Py_TPFLAGS_BASETYPE  # (1UL << 10)  # pylint: disable=invalid-name
 
 
 @_override_with_(_rs.is_structseq_class)

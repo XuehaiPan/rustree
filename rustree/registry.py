@@ -1,4 +1,4 @@
-# Copyright 2024-2025 Xuehai Pan. All Rights Reserved.
+# Copyright 2022-2026 MetaOPT Team. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import functools
 import inspect
 import sys
 from collections import OrderedDict, defaultdict, deque, namedtuple
@@ -27,7 +28,7 @@ from operator import itemgetter, methodcaller
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, NamedTuple, TypeVar, overload
 
-import rustree._rs as _rs
+from rustree import _rs
 from rustree.accessors import (
     AutoEntry,
     MappingEntry,
@@ -36,7 +37,15 @@ from rustree.accessors import (
     SequenceEntry,
     StructSequenceEntry,
 )
-from rustree.typing import PyTreeKind, StructSequence, T, is_namedtuple_class, is_structseq_class
+from rustree.typing import (
+    Children,
+    MetaData,
+    PyTreeKind,
+    StructSequence,
+    T,
+    is_namedtuple_class,
+    is_structseq_class,
+)
 from rustree.utils import safe_zip, total_order_sorted, unzip2
 
 
@@ -69,11 +78,11 @@ class PyTreeNodeRegistryEntry(Generic[T]):
     flatten_func: FlattenFunc[T]
     unflatten_func: UnflattenFunc[T]
 
-    if sys.version_info >= (3, 10):
+    if sys.version_info >= (3, 10):  # pragma: >=3.10 cover
         _: dataclasses.KW_ONLY  # Python 3.10+
 
     path_entry_type: builtins.type[PyTreeEntry] = AutoEntry
-    kind: PyTreeKind = PyTreeKind.CUSTOM
+    kind: PyTreeKind = dataclasses.field(default_factory=lambda: PyTreeKind.CUSTOM)
     namespace: str = ''
 
 
@@ -149,7 +158,7 @@ def pytree_node_registry_get(  # noqa: C901
     *,
     namespace: str = '',
 ) -> dict[type, PyTreeNodeRegistryEntry] | PyTreeNodeRegistryEntry | None:
-    """Lookup the pytree node registry.
+    """Look up the pytree node registry.
 
     >>> register_pytree_node.get()  # doctest: +IGNORE_WHITESPACE,ELLIPSIS
     {
@@ -210,9 +219,11 @@ def pytree_node_registry_get(  # noqa: C901
         and cls is not namedtuple  # noqa: PYI024
         and not inspect.isclass(cls)
     ):
-        raise TypeError(f'Expected a class or None, got {cls!r}.')
+        raise TypeError(f'Expected a class or None, got {cls!r}.')  # pragma: !=3.9 cover
     if not isinstance(namespace, str):
-        raise TypeError(f'The namespace must be a string, got {namespace!r}.')
+        raise TypeError(  # pragma: !=3.9 cover
+            f'The namespace must be a string, got {namespace!r}.',
+        )
 
     if cls is None:
         namespaces = frozenset({namespace, ''})
@@ -299,8 +310,13 @@ def register_pytree_node(
         ValueError: If the namespace is an empty string.
         ValueError: If the type is already registered in the registry.
 
+    .. versionadded:: 0.12.0
+        The ``path_entry_type`` argument to specify the path entry type used in
+        :meth:`PyTreeSpec.accessors` and :func:`tree_flatten_with_accessor`.
+        If not provided, :class:`AutoEntry` will be used.
+
     Examples:
-        >>> # Registry a Python type with lambda functions
+        >>> # Register a Python type with lambda functions
         >>> register_pytree_node(
         ...     set,
         ...     lambda s: (sorted(s), None, None),
@@ -309,71 +325,56 @@ def register_pytree_node(
         ... )
         <class 'set'>
 
-        >>> # Register a Python type into a namespace
-        >>> import torch
-        >>> register_pytree_node(
-        ...     torch.Tensor,
-        ...     flatten_func=lambda tensor: (
-        ...         (tensor.cpu().detach().numpy(),),
-        ...         {'dtype': tensor.dtype, 'device': tensor.device, 'requires_grad': tensor.requires_grad},
+        >>> # Register a custom type into a namespace with accessor support
+        >>> import types
+        >>> # This can be whatever your container type is.
+        >>> class MyContainer(types.SimpleNamespace):
+        ...     pass
+        >>> # (Optional) Define a custom path entry type for accessor support.
+        >>> # Here we showcase how to define one. In practice, you can use the built-in ``GetAttrEntry``.
+        >>> class MyContainerEntry(PyTreeEntry):
+        ...     def __call__(self, obj):
+        ...         return getattr(obj, self.entry)
+        ...     def codify(self, node=''):
+        ...         return f'{node}.{self.entry}'
+        >>> register_pytree_node(  # doctest: +ELLIPSIS
+        ...     MyContainer,
+        ...     flatten_func=lambda ct: (
+        ...         list(vars(ct).values()),
+        ...         list(vars(ct).keys()),
+        ...         list(vars(ct).keys()),
         ...     ),
-        ...     unflatten_func=lambda metadata, children: torch.tensor(children[0], **metadata),
-        ...     namespace='torch2numpy',
+        ...     unflatten_func=lambda keys, values: MyContainer(**dict(zip(keys, values))),
+        ...     path_entry_type=MyContainerEntry,
+        ...     namespace='mycontainer',
         ... )
-        <class 'torch.Tensor'>
+        <class '...MyContainer'>
 
-        >>> # doctest: +SKIP
-        >>> tree = {'weight': torch.ones(size=(1, 2)).cuda(), 'bias': torch.zeros(size=(2,))}
-        >>> tree
-        {'weight': tensor([[1., 1.]], device='cuda:0'), 'bias': tensor([0., 0.])}
+        >>> tree = {'config': MyContainer(lr=0.01, momentum=0.9), 'steps': 1000}
 
         >>> # Flatten without specifying the namespace
-        >>> tree_flatten(tree)  # `torch.Tensor`s are leaf nodes
-        ([tensor([0., 0.]), tensor([[1., 1.]], device='cuda:0')], PyTreeSpec({'bias': *, 'weight': *}))
+        >>> tree_flatten(tree)  # `MyContainer`s are leaf nodes
+        ([MyContainer(lr=0.01, momentum=0.9), 1000], PyTreeSpec({'config': *, 'steps': *}))
 
         >>> # Flatten with the namespace
-        >>> tree_flatten(tree, namespace='torch2numpy')
-        (
-            [array([0., 0.], dtype=float32), array([[1., 1.]], dtype=float32)],
-            PyTreeSpec(
-                {
-                    'bias': CustomTreeNode(Tensor[{'dtype': torch.float32, 'device': device(type='cpu'), 'requires_grad': False}], [*]),
-                    'weight': CustomTreeNode(Tensor[{'dtype': torch.float32, 'device': device(type='cuda', index=0), 'requires_grad': False}], [*])
-                },
-                namespace='torch2numpy'
-            )
-        )
+        >>> leaves, treespec = tree_flatten(tree, namespace='mycontainer')
+        >>> leaves, treespec
+        ([0.01, 0.9, 1000], PyTreeSpec({'config': CustomTreeNode(MyContainer[['lr', 'momentum']], [*, *]), 'steps': *}, namespace='mycontainer'))
 
-        >>> # Register the same type with a different namespace for different behaviors
-        >>> def tensor2flatparam(tensor):
-        ...     return [torch.nn.Parameter(tensor.reshape(-1))], tensor.shape, None
-        ...
-        ... def flatparam2tensor(metadata, children):
-        ...     return children[0].reshape(metadata)
-        ...
-        ... register_pytree_node(
-        ...     torch.Tensor,
-        ...     flatten_func=tensor2flatparam,
-        ...     unflatten_func=flatparam2tensor,
-        ...     namespace='tensor2flatparam',
-        ... )
-        <class 'torch.Tensor'>
+        >>> # Custom ``entries`` are defined as attribute names
+        >>> tree_paths(tree, namespace='mycontainer')
+        [('config', 'lr'), ('config', 'momentum'), ('steps',)]
 
-        >>> # Flatten with the new namespace
-        >>> tree_flatten(tree, namespace='tensor2flatparam')
-        (
-            [
-                Parameter containing: tensor([0., 0.], requires_grad=True),
-                Parameter containing: tensor([1., 1.], device='cuda:0', requires_grad=True)
-            ],
-            PyTreeSpec(
-                {
-                    'bias': CustomTreeNode(Tensor[torch.Size([2])], [*]),
-                    'weight': CustomTreeNode(Tensor[torch.Size([1, 2])], [*])
-                },
-                namespace='tensor2flatparam'
-            )
-        )
+        >>> # Custom path entry type defines the pytree access behavior
+        >>> accessors = tree_accessors(tree, namespace='mycontainer')
+        >>> accessors[0].codify()
+        "*['config'].lr"
+        >>> accessors[0](tree)
+        0.01
+
+        >>> # Unflatten back to a copy of the original object
+        >>> tree_unflatten(treespec, leaves)
+        {'config': MyContainer(lr=0.01, momentum=0.9), 'steps': 1000}
     """  # pylint: disable=line-too-long
     if not inspect.isclass(cls):
         raise TypeError(f'Expected a class, got {cls!r}.')
@@ -432,6 +433,7 @@ def register_pytree_node_class(
 ) -> CustomTreeNodeType: ...
 
 
+# pylint: disable-next=too-many-branches
 def register_pytree_node_class(  # noqa: C901
     cls: CustomTreeNodeType | str | None = None,
     /,
@@ -468,11 +470,29 @@ def register_pytree_node_class(  # noqa: C901
     Raises:
         TypeError: If the path entry class is not a subclass of :class:`PyTreeEntry`.
         TypeError: If the namespace is not a string.
+        TypeError: If the class does not define the required method pairs.
         ValueError: If the namespace is an empty string.
         ValueError: If the type is already registered in the registry.
 
+    .. versionadded:: 0.12.0
+        The ``TREE_PATH_ENTRY_TYPE`` class variable to specify the path entry type used in
+        :meth:`PyTreeSpec.accessors` and :func:`tree_flatten_with_accessor`.
+        If not provided, :class:`AutoEntry` will be used.
+
+    .. versionadded:: 0.18.0
+        Previously, this function looked for methods named ``tree_flatten`` and ``tree_unflatten``
+        for the given class. Since version 0.18.0, it prefers methods named ``__tree_flatten__``
+        and ``__tree_unflatten__`` instead. The old method names are still supported for
+        backward compatibility, but it is recommended to use the new method names.
+        The method resolution follows this priority:
+        1. If both ``__tree_flatten__`` and ``__tree_unflatten__`` are defined, use them directly.
+        2. If both ``tree_flatten`` and ``tree_unflatten`` are defined, wrap them as dunder methods.
+        3. If neither complete pair is available, raise a :exc:`TypeError` suggesting the new method names.
+
     This function is a thin wrapper around :func:`register_pytree_node`, and provides a
-    class-oriented interface::
+    class-oriented interface:
+
+    .. code-block:: python
 
         @register_pytree_node_class(namespace='foo')
         class Special:
@@ -482,22 +502,34 @@ def register_pytree_node_class(  # noqa: C901
                 self.x = x
                 self.y = y
 
-            def tree_flatten(self):
+            def __tree_flatten__(self):
                 return ((self.x, self.y), None, ('x', 'y'))
 
             @classmethod
-            def tree_unflatten(cls, metadata, children):
+            def __tree_unflatten__(cls, metadata, children):
                 return cls(*children)
 
         @register_pytree_node_class('mylist')
         class MyList(UserList):
             TREE_PATH_ENTRY_TYPE = SequenceEntry
 
+            def __tree_flatten__(self):
+                return self.data, None, None
+
+            @classmethod
+            def __tree_unflatten__(cls, metadata, children):
+                return cls(*children)
+
+        # Legacy style (still supported but not recommended)
+        @register_pytree_node_class(namespace='legacy')
+        class LegacyStyleMyList(UserList):
             def tree_flatten(self):
+                # Implementation automatically wrapped as __tree_flatten__
                 return self.data, None, None
 
             @classmethod
             def tree_unflatten(cls, metadata, children):
+                # Implementation automatically wrapped as __tree_unflatten__
                 return cls(*children)
     """
     if cls is __GLOBAL_NAMESPACE or isinstance(cls, str):
@@ -532,10 +564,49 @@ def register_pytree_node_class(  # noqa: C901
     if not (inspect.isclass(path_entry_type) and issubclass(path_entry_type, PyTreeEntry)):
         raise TypeError(f'Expected a subclass of PyTreeEntry, got {path_entry_type!r}.')
 
+    # Check for dunder-styled methods first (preferred since 0.18.0)
+    if not all(
+        callable(getattr(cls, method, None))
+        for method in ('__tree_flatten__', '__tree_unflatten__')
+    ):
+        # Check for old-styled methods (backward compatibility)
+        if not all(
+            callable(getattr(cls, method, None)) for method in ('tree_flatten', 'tree_unflatten')
+        ):
+            raise TypeError(
+                f'{cls!r} must define both `__tree_flatten__` and `__tree_unflatten__` methods '
+                'for registration as a pytree node.',
+            )
+
+        # Add dunder-styled wrapper methods to the class
+        # pylint: disable=no-member
+
+        @functools.wraps(cls.tree_flatten)
+        def __tree_flatten__(  # noqa: N807
+            self: CustomTreeNode[T],
+            /,
+        ) -> tuple[Children[T], MetaData] | tuple[Children[T], MetaData, Iterable[Any] | None]:
+            return self.tree_flatten()  # type: ignore[attr-defined]
+
+        @classmethod  # type: ignore[misc]
+        @functools.wraps(getattr(cls.tree_unflatten, '__func__', cls.tree_unflatten))
+        def __tree_unflatten__(  # noqa: N807
+            cls: type[CustomTreeNode[T]],
+            metadata: MetaData,
+            children: Children[T],
+            /,
+        ) -> CustomTreeNode[T]:
+            return cls.tree_unflatten(metadata, children)  # type: ignore[attr-defined]
+
+        # pylint: enable=no-member
+
+        cls.__tree_flatten__ = __tree_flatten__
+        cls.__tree_unflatten__ = __tree_unflatten__
+
     register_pytree_node(
         cls,
-        methodcaller('tree_flatten'),
-        cls.tree_unflatten,
+        methodcaller('__tree_flatten__'),
+        cls.__tree_unflatten__,
         path_entry_type=path_entry_type,
         namespace=namespace,
     )
@@ -601,7 +672,7 @@ def dict_insertion_ordered(mode: bool, /, *, namespace: str) -> Generator[None]:
 
     This context manager is used to temporarily set the dictionary sorting mode for a specific
     namespace. The dictionary sorting mode is used to determine whether the keys of a dictionary
-    should be sorted or keeping the insertion order when flattening a pytree.
+    should be sorted or keep the insertion order when flattening a pytree.
 
     >>> tree = {'b': (2, [3, 4]), 'a': 1, 'c': None, 'd': 5}
     >>> tree_flatten(tree)  # doctest: +IGNORE_WHITESPACE
@@ -721,8 +792,8 @@ def _defaultdict_flatten(
     tuple[Callable[[], VT] | None, list[KT]],
     tuple[KT, ...],
 ]:
-    values, keys, entries = _dict_flatten(dct)
-    return values, (dct.default_factory, keys), entries
+    values, dict_metadata, entries = _dict_flatten(dct)
+    return values, (dct.default_factory, dict_metadata), entries
 
 
 def _defaultdict_unflatten(
@@ -730,8 +801,8 @@ def _defaultdict_unflatten(
     values: Iterable[VT],
     /,
 ) -> defaultdict[KT, VT]:
-    default_factory, keys = metadata
-    return defaultdict(default_factory, _dict_unflatten(keys, values))
+    default_factory, dict_metadata = metadata
+    return defaultdict(default_factory, _dict_unflatten(dict_metadata, values))
 
 
 def _defaultdict_insertion_ordered_flatten(
@@ -742,8 +813,8 @@ def _defaultdict_insertion_ordered_flatten(
     tuple[Callable[[], VT] | None, list[KT]],
     tuple[KT, ...],
 ]:
-    values, keys, entries = _dict_insertion_ordered_flatten(dct)
-    return values, (dct.default_factory, keys), entries
+    values, dict_metadata, entries = _dict_insertion_ordered_flatten(dct)
+    return values, (dct.default_factory, dict_metadata), entries
 
 
 def _defaultdict_insertion_ordered_unflatten(
@@ -751,8 +822,8 @@ def _defaultdict_insertion_ordered_unflatten(
     values: Iterable[VT],
     /,
 ) -> defaultdict[KT, VT]:
-    default_factory, keys = metadata
-    return defaultdict(default_factory, _dict_insertion_ordered_unflatten(keys, values))
+    default_factory, dict_metadata = metadata
+    return defaultdict(default_factory, _dict_insertion_ordered_unflatten(dict_metadata, values))
 
 
 def _deque_flatten(deq: deque[T], /) -> tuple[deque[T], int | None]:

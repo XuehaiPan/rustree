@@ -1,0 +1,375 @@
+# Copyright 2022-2026 MetaOPT Team. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+# pylint: disable=missing-function-docstring,invalid-name
+
+import atexit
+import itertools
+import pickle
+import weakref
+from collections import OrderedDict, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import pytest
+
+import rustree
+from helpers import (
+    GLOBAL_NAMESPACE,
+    PYPY,
+    TREES,
+    WASM,
+    Py_DEBUG,
+    Py_GIL_DISABLED,
+    disable_systrace,
+    gc_collect,
+    parametrize,
+    recursionlimit,
+)
+
+
+if PYPY or WASM:
+    pytest.skip('Test for CPython only', allow_module_level=True)
+
+
+if Py_GIL_DISABLED and not Py_DEBUG:
+    NUM_WORKERS = 32
+    NUM_FUTURES = 128
+else:
+    NUM_WORKERS = 4
+    NUM_FUTURES = 16
+
+
+EXECUTOR = ThreadPoolExecutor(max_workers=NUM_WORKERS)
+atexit.register(EXECUTOR.shutdown)
+
+
+def run(func, /, *args, **kwargs):
+    future = EXECUTOR.submit(func, *args, **kwargs)
+    exception = future.exception()
+    if exception is not None:
+        raise exception
+    return future.result()
+
+
+def concurrent_run(func, /, *args, **kwargs):
+    futures = [EXECUTOR.submit(func, *args, **kwargs) for _ in range(NUM_FUTURES)]
+    future2index = {future: i for i, future in enumerate(futures)}
+    completed_futures = sorted(as_completed(futures), key=future2index.get)
+    first_exception = next(filter(None, (future.exception() for future in completed_futures)), None)
+    if first_exception is not None:
+        raise first_exception
+    return [future.result() for future in completed_futures]
+
+
+run(object)  # warm-up
+
+
+@parametrize(
+    tree=TREES,
+    namespace=['', 'undefined', 'namespace'],
+    dict_should_be_sorted=[False, True],
+    dict_session_namespace=['', 'undefined', 'namespace'],
+)
+@disable_systrace
+def test_tree_flatten_unflatten_thread_safe(
+    tree,
+    namespace,
+    dict_should_be_sorted,
+    dict_session_namespace,
+):
+    def test_fn():
+        return rustree.tree_flatten(tree, namespace=namespace)
+
+    with rustree.dict_insertion_ordered(
+        not dict_should_be_sorted,
+        namespace=dict_session_namespace or GLOBAL_NAMESPACE,
+    ):
+        leaves, treespec = expected = test_fn()
+        for result in concurrent_run(test_fn):
+            assert result == expected
+
+    for result in concurrent_run(rustree.tree_unflatten, treespec, leaves):
+        assert result == tree
+
+
+@parametrize(
+    tree=TREES,
+    namespace=['', 'undefined', 'namespace'],
+    dict_should_be_sorted=[False, True],
+    dict_session_namespace=['', 'undefined', 'namespace'],
+)
+@disable_systrace
+def test_tree_flatten_with_path_thread_safe(
+    tree,
+    namespace,
+    dict_should_be_sorted,
+    dict_session_namespace,
+):
+    def test_fn():
+        return rustree.tree_flatten_with_path(tree, namespace=namespace)
+
+    with rustree.dict_insertion_ordered(
+        not dict_should_be_sorted,
+        namespace=dict_session_namespace or GLOBAL_NAMESPACE,
+    ):
+        expected = test_fn()
+        for result in concurrent_run(test_fn):
+            assert result == expected
+
+
+@parametrize(
+    tree=TREES,
+    namespace=['', 'undefined', 'namespace'],
+    dict_should_be_sorted=[False, True],
+    dict_session_namespace=['', 'undefined', 'namespace'],
+)
+@disable_systrace
+def test_tree_flatten_with_accessor_thread_safe(
+    tree,
+    namespace,
+    dict_should_be_sorted,
+    dict_session_namespace,
+):
+    def test_fn():
+        return rustree.tree_flatten_with_accessor(tree, namespace=namespace)
+
+    with rustree.dict_insertion_ordered(
+        not dict_should_be_sorted,
+        namespace=dict_session_namespace or GLOBAL_NAMESPACE,
+    ):
+        expected = test_fn()
+        for result in concurrent_run(test_fn):
+            assert result == expected
+
+
+@parametrize(tree=TREES)
+@disable_systrace
+def test_treespec_string_representation(tree):
+    expected_string = repr(rustree.tree_structure(tree))
+
+    def check1():
+        treespec = rustree.tree_structure(tree)
+        assert str(treespec) == expected_string
+        assert repr(treespec) == expected_string
+
+    concurrent_run(check1)
+
+    treespec = rustree.tree_structure(tree)
+
+    def check2():
+        assert str(treespec) == expected_string
+        assert repr(treespec) == expected_string
+
+    concurrent_run(check2)
+
+
+@disable_systrace
+def test_treespec_self_referential():  # noqa: C901
+    class Holder:
+        def __init__(self, value):
+            self.value = value
+
+        def __eq__(self, other):
+            return isinstance(other, Holder) and self.value == other.value
+
+        def __hash__(self):
+            return hash(self.value)
+
+        def __repr__(self):
+            return f'Holder({self.value!r})'
+
+    hashes = set()
+    key = Holder('a')
+
+    treespec = rustree.tree_structure({key: 0})
+
+    def check1():
+        assert str(treespec) == "PyTreeSpec({Holder('a'): *})"  # noqa: F821
+        assert hash(treespec) == hash(treespec)  # noqa: F821
+
+    concurrent_run(check1)
+
+    hashes.add(hash(treespec))
+
+    key.value = 'b'
+
+    def check2():
+        assert str(treespec) == "PyTreeSpec({Holder('b'): *})"  # noqa: F821
+        assert hash(treespec) == hash(treespec)  # noqa: F821
+        assert hash(treespec) not in hashes  # noqa: F821
+
+    concurrent_run(check2)
+
+    hashes.add(hash(treespec))
+
+    key.value = treespec
+
+    def check3():
+        assert str(treespec) == 'PyTreeSpec({Holder(...): *})'  # noqa: F821
+        assert hash(treespec) == hash(treespec)  # noqa: F821
+        assert hash(treespec) not in hashes  # noqa: F821
+
+    concurrent_run(check3)
+
+    hashes.add(hash(treespec))
+
+    key.value = ('a', treespec, treespec)
+
+    def check4():
+        assert str(treespec) == "PyTreeSpec({Holder(('a', ..., ...)): *})"  # noqa: F821
+        assert hash(treespec) == hash(treespec)  # noqa: F821
+        assert hash(treespec) not in hashes  # noqa: F821
+
+    concurrent_run(check4)
+
+    hashes.add(hash(treespec))
+
+    other = rustree.tree_structure({Holder(treespec): 1})
+
+    def check5():
+        assert (
+            str(other)  # noqa: F821
+            == "PyTreeSpec({Holder(PyTreeSpec({Holder(('a', ..., ...)): *})): *})"
+        )
+        assert hash(other) == hash(other)  # noqa: F821
+        assert hash(other) not in hashes  # noqa: F821
+
+    concurrent_run(check5)
+
+    hashes.add(hash(other))
+
+    key.value = other
+
+    def check6():
+        assert (
+            str(treespec) == 'PyTreeSpec({Holder(PyTreeSpec({Holder(...): *})): *})'  # noqa: F821
+        )
+        assert str(other) == 'PyTreeSpec({Holder(PyTreeSpec({Holder(...): *})): *})'  # noqa: F821
+        assert hash(treespec) == hash(treespec)  # noqa: F821
+        assert hash(treespec) not in hashes  # noqa: F821
+
+    concurrent_run(check6)
+
+    hashes.add(hash(treespec))
+
+    def check7():
+        assert hash(other) == hash(other)  # noqa: F821
+        assert hash(treespec) == hash(other)  # noqa: F821
+
+    concurrent_run(check7)
+
+    del check1, check2, check3, check4, check5, check6, check7
+    gc_collect()
+
+    with recursionlimit(64):
+        with pytest.raises(RecursionError):
+            assert treespec != other
+
+    wr = weakref.ref(treespec)
+    del treespec, key, other
+    gc_collect()
+    assert wr() is None
+
+
+@parametrize(
+    tree=TREES,
+    namespace=['', 'undefined', 'namespace'],
+    dict_should_be_sorted=[False, True],
+    dict_session_namespace=['', 'undefined', 'namespace'],
+)
+@disable_systrace
+def test_treespec_pickle_roundtrip(
+    tree,
+    namespace,
+    dict_should_be_sorted,
+    dict_session_namespace,
+):
+    def check1():
+        assert pickle.loads(pickle.dumps(expected)) == expected
+
+    def check2():
+        assert pickle.dumps(expected) == expected_serialized
+        assert pickle.loads(expected_serialized) == expected
+
+    def check3():
+        assert list(rustree.tree_unflatten(actual, range(len(actual)))) == list(
+            rustree.tree_unflatten(expected, range(len(expected))),
+        )
+
+    with rustree.dict_insertion_ordered(
+        not dict_should_be_sorted,
+        namespace=dict_session_namespace or GLOBAL_NAMESPACE,
+    ):
+        expected = rustree.tree_structure(tree, namespace=namespace)
+        expected_serialized = b''
+        try:
+            pickle.loads(pickle.dumps(tree))
+        except pickle.PicklingError:
+            with pytest.raises(pickle.PicklingError, match=r"Can't pickle .*:"):
+                pickle.loads(pickle.dumps(expected))
+        else:
+            expected_serialized = pickle.dumps(expected)
+            actual = pickle.loads(expected_serialized)
+            concurrent_run(check1)
+            concurrent_run(check2)
+            if expected.type in {dict, OrderedDict, defaultdict}:
+                concurrent_run(check3)
+
+
+@parametrize(
+    tree=TREES,
+    none_is_leaf=[False, True],
+    namespace=['', 'undefined', 'namespace'],
+    dict_should_be_sorted=[False, True],
+    dict_session_namespace=['', 'undefined', 'namespace'],
+)
+@disable_systrace
+def test_tree_iter_thread_safe(
+    tree,
+    none_is_leaf,
+    namespace,
+    dict_should_be_sorted,
+    dict_session_namespace,
+):
+    def get_iterator():
+        counter = itertools.count()
+        with rustree.dict_insertion_ordered(
+            not dict_should_be_sorted,
+            namespace=dict_session_namespace or GLOBAL_NAMESPACE,
+        ):
+            new_tree = rustree.tree_map(
+                lambda x: next(counter),
+                tree,
+                none_is_leaf=none_is_leaf,
+                namespace=namespace,
+            )
+            num_leaves = next(counter)
+            it = rustree.tree_iter(
+                new_tree,
+                none_is_leaf=none_is_leaf,
+                namespace=namespace,
+            )
+        return it, new_tree, num_leaves
+
+    it, _, num_leaves = get_iterator()
+    sentinel = object()
+    assert list(it) == list(range(num_leaves))
+    assert next(it, sentinel) is sentinel
+
+    it, new_tree, _ = get_iterator()
+    results = concurrent_run(list, it)
+    assert sorted(itertools.chain.from_iterable(results)) == list(range(num_leaves))
+    for seq in results:
+        assert seq == sorted(seq), f'Expected {sorted(seq)}, but got {seq}: tree {new_tree!r}.'
