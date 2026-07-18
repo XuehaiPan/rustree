@@ -1,4 +1,4 @@
-// Copyright 2024-2025 Xuehai Pan. All Rights Reserved.
+// Copyright 2024-2026 Xuehai Pan. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,7 +25,13 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::sync::Arc;
 
-#[pyclass(eq, eq_int, module = "rustree", rename_all = "UPPERCASE")]
+#[pyclass(
+    eq,
+    eq_int,
+    from_py_object,
+    module = "rustree",
+    rename_all = "UPPERCASE"
+)]
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum PyTreeKind {
     Custom = 0,
@@ -69,8 +75,6 @@ impl<T> std::hash::Hash for IdHashedPy<T> {
     }
 }
 
-static mut REGISTRY_NONE_IS_NODE: PyOnceLock<PyTreeTypeRegistry> = PyOnceLock::new();
-static mut REGISTRY_NONE_IS_LEAF: PyOnceLock<PyTreeTypeRegistry> = PyOnceLock::new();
 static mut DICT_INSERTION_ORDERED_NAMESPACES: OnceCell<HashSet<String>> = OnceCell::new();
 
 pub(crate) struct PyTreeTypeRegistration {
@@ -78,6 +82,8 @@ pub(crate) struct PyTreeTypeRegistration {
     pub(crate) r#type: Py<PyType>,
     pub(crate) flatten_func: Option<Py<PyAny>>,
     pub(crate) unflatten_func: Option<Py<PyAny>>,
+    // Kept for a future path-based access implementation; not read yet.
+    #[allow(dead_code)]
     pub(crate) path_entry_type: Option<Py<PyType>>,
 }
 
@@ -89,8 +95,8 @@ pub struct PyTreeTypeRegistry {
 
 impl PyTreeTypeRegistry {
     fn new(py: Python, none_is_leaf: bool) -> &'static mut Self {
-        static mut REGISTRY_NONE_IS_NODE: GILOnceCell<PyTreeTypeRegistry> = GILOnceCell::new();
-        static mut REGISTRY_NONE_IS_LEAF: GILOnceCell<PyTreeTypeRegistry> = GILOnceCell::new();
+        static mut REGISTRY_NONE_IS_NODE: PyOnceLock<PyTreeTypeRegistry> = PyOnceLock::new();
+        static mut REGISTRY_NONE_IS_LEAF: PyOnceLock<PyTreeTypeRegistry> = PyOnceLock::new();
 
         let init_fn = |none_is_leaf: bool| {
             move || {
@@ -161,13 +167,12 @@ impl PyTreeTypeRegistry {
         namespace: &str,
     ) -> (PyTreeKind, Option<Arc<PyTreeTypeRegistration>>) {
         let cls = &obj.get_type();
-        if !namespace.is_empty() {
-            if let Some(registration) = self
+        if !namespace.is_empty()
+            && let Some(registration) = self
                 .named_registrations
                 .get(&(String::from(namespace), cls.clone().unbind().into()))
-            {
-                return (registration.as_ref().kind, Some(registration.clone()));
-            }
+        {
+            return (registration.as_ref().kind, Some(registration.clone()));
         }
         if let Some(registration) = self.registrations.get(&cls.clone().unbind().into()) {
             (registration.as_ref().kind, Some(registration.clone()))

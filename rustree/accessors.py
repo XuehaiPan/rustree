@@ -1,4 +1,4 @@
-# Copyright 2024-2025 Xuehai Pan. All Rights Reserved.
+# Copyright 2024-2026 Xuehai Pan. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -209,7 +209,9 @@ class GetAttrEntry(PyTreeEntry):
 
     def __call__(self, obj: Any, /) -> Any:
         """Get the child object."""
-        return getattr(obj, self.name)
+        for attr in self.name.split('.'):
+            obj = getattr(obj, attr)
+        return obj
 
     def codify(self, /, node: str = '') -> str:
         """Generate code for accessing the path entry."""
@@ -334,7 +336,7 @@ class DataclassEntry(GetAttrEntry):
     entry: str | int  # type: ignore[assignment]
 
     @property
-    def fields(self, /) -> tuple[str, ...]:  # pragma: no cover
+    def fields(self, /) -> tuple[str, ...]:
         """Get all field names."""
         return tuple(f.name for f in dataclasses.fields(self.type))
 

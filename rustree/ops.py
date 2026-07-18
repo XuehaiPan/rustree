@@ -1,4 +1,4 @@
-# Copyright 2024-2025 Xuehai Pan. All Rights Reserved.
+# Copyright 2024-2026 Xuehai Pan. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -39,8 +39,8 @@ __all__ = [
 ]
 
 
-MAX_RECURSION_DEPTH: int = _rs.MAX_RECURSION_DEPTH  # 1000
-"""Maximum recursion depth for pytree traversal. It is 1000.
+MAX_RECURSION_DEPTH: int = _rs.MAX_RECURSION_DEPTH
+"""Maximum recursion depth for pytree traversal.
 
 This limit prevents infinite recursion from causing an overflow of the C stack
 and crashing Python.
@@ -109,7 +109,8 @@ def tree_flatten(
             flattening should traverse the current object.
         none_is_leaf (bool, optional): Whether to treat :data:`None` as a leaf. If :data:`False`,
             :data:`None` is a non-leaf node with arity 0. Thus :data:`None` is contained in the
-            treespec rather than in the leaves list. (default: :data:`False`)
+            treespec rather than in the leaves list and :data:`None` will remain in the result
+            pytree. (default: :data:`False`)
         namespace (str, optional): The registry namespace used for custom pytree node types.
             (default: :const:`''`, i.e., the global namespace)
 
@@ -174,7 +175,8 @@ def tree_leaves(
             flattening should traverse the current object.
         none_is_leaf (bool, optional): Whether to treat :data:`None` as a leaf. If :data:`False`,
             :data:`None` is a non-leaf node with arity 0. Thus :data:`None` is contained in the
-            treespec rather than in the leaves list. (default: :data:`False`)
+            treespec rather than in the leaves list and :data:`None` will remain in the result
+            pytree. (default: :data:`False`)
         namespace (str, optional): The registry namespace used for custom pytree node types.
             (default: :const:`''`, i.e., the global namespace)
 
@@ -216,7 +218,8 @@ def tree_structure(
             flattening should traverse the current object.
         none_is_leaf (bool, optional): Whether to treat :data:`None` as a leaf. If :data:`False`,
             :data:`None` is a non-leaf node with arity 0. Thus :data:`None` is contained in the
-            treespec rather than in the leaves list. (default: :data:`False`)
+            treespec rather than in the leaves list and :data:`None` will remain in the result
+            pytree. (default: :data:`False`)
         namespace (str, optional): The registry namespace used for custom pytree node types.
             (default: :const:`''`, i.e., the global namespace)
 

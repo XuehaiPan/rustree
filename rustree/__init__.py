@@ -1,4 +1,4 @@
-# Copyright 2024-2025 Xuehai Pan. All Rights Reserved.
+# Copyright 2024-2026 Xuehai Pan. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -67,6 +67,18 @@ __all__ = [
     'tree_leaves',
     'tree_structure',
     'tree_is_leaf',
+    # Accessor
+    'PyTreeEntry',
+    'GetAttrEntry',
+    'GetItemEntry',
+    'FlattenedEntry',
+    'AutoEntry',
+    'SequenceEntry',
+    'MappingEntry',
+    'NamedTupleEntry',
+    'StructSequenceEntry',
+    'DataclassEntry',
+    'PyTreeAccessor',
     # Typing
     'PyTreeSpec',
     'PyTreeKind',
@@ -80,19 +92,19 @@ __all__ = [
     'is_namedtuple_instance',
     'namedtuple_fields',
     'is_structseq',
-    'is_structseq_instance',
     'is_structseq_class',
+    'is_structseq_instance',
     'structseq_fields',
-    # Accessor
-    'PyTreeEntry',
-    'GetAttrEntry',
-    'GetItemEntry',
-    'FlattenedEntry',
-    'AutoEntry',
-    'SequenceEntry',
-    'MappingEntry',
-    'NamedTupleEntry',
-    'StructSequenceEntry',
-    'DataclassEntry',
-    'PyTreeAccessor',
 ]
+
+
+MAX_RECURSION_DEPTH: int = MAX_RECURSION_DEPTH
+"""Maximum recursion depth for pytree traversal.
+
+This limit prevents infinite recursion from causing an overflow of the C stack
+and crashing Python.
+"""
+NONE_IS_NODE: bool = NONE_IS_NODE  # literal constant
+"""Literal constant that treats :data:`None` as a pytree non-leaf node."""
+NONE_IS_LEAF: bool = NONE_IS_LEAF  # literal constant
+"""Literal constant that treats :data:`None` as a pytree leaf node."""

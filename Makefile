@@ -1,4 +1,4 @@
-# Copyright 2024-2025 Xuehai Pan. All Rights Reserved.
+# Copyright 2024-2026 Xuehai Pan. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -59,6 +59,7 @@ build:
 
 check_pip_install = $(PYTHON) -m pip show $(1) &>/dev/null || (cd && $(PYTHON) -m pip install --upgrade $(1))
 check_pip_install_extra = $(PYTHON) -m pip show $(1) &>/dev/null || (cd && $(PYTHON) -m pip install --upgrade $(2))
+check_cargo_component = cargo $(1) --version &>/dev/null || (cd && rustup component add $(2))
 
 .PHONY: pre-commit-install
 pre-commit-install:
@@ -110,12 +111,11 @@ test-install: pytest-install
 
 .PHONY: rustfmt-install
 rustfmt-install:
-	rustup component add rustfmt
+	$(call check_cargo_component,fmt,rustfmt)
 
 .PHONY: clippy-install
 clippy-install:
-	rustup component add clippy
-
+	$(call check_cargo_component,clippy,clippy)
 
 .PHONY: go-install
 go-install:

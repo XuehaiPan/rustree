@@ -142,16 +142,16 @@ impl Node {
                         .as_ref()
                         .unwrap()
                         .bind(py)
-                        .downcast::<PyList>()?
+                        .cast::<PyList>()?
                         .clone()
                 } else {
                     self.node_data
                         .as_ref()
                         .unwrap()
                         .bind(py)
-                        .downcast::<PyTuple>()?
+                        .cast::<PyTuple>()?
                         .get_item(1)?
-                        .downcast::<PyList>()?
+                        .cast::<PyList>()?
                         .clone()
                 };
                 for (key, child) in keys.iter().zip(children.iter()) {
@@ -166,7 +166,7 @@ impl Node {
                         .as_ref()
                         .unwrap()
                         .bind(py)
-                        .downcast::<PyTuple>()?
+                        .cast::<PyTuple>()?
                         .get_item(0)?;
                     return Ok(get_defaultdict(py)
                         .call(py, (default_factory, dict), None)?
@@ -267,26 +267,26 @@ impl PyTreeSpec {
                     }
                 }
                 PyTreeKind::Tuple => {
-                    let obj = obj.downcast::<PyTuple>()?;
+                    let obj = obj.cast::<PyTuple>()?;
                     node.arity = obj.len();
                     for child in obj {
                         found_custom |= recurse(child)?;
                     }
                 }
                 PyTreeKind::List => {
-                    let obj = obj.downcast::<PyList>()?;
+                    let obj = obj.cast::<PyList>()?;
                     node.arity = obj.len();
                     for child in obj {
                         found_custom |= recurse(child)?;
                     }
                 }
                 PyTreeKind::Dict | PyTreeKind::OrderedDict | PyTreeKind::DefaultDict => {
-                    let obj = obj.downcast::<PyDict>()?;
+                    let obj = obj.cast::<PyDict>()?;
                     node.arity = obj.len();
                     let keys = obj.keys();
                     node.original_keys = Some(
                         keys.call_method0("copy")?
-                            .downcast::<PyList>()?
+                            .cast::<PyList>()?
                             .as_unbound()
                             .clone_ref(obj.py()),
                     );
@@ -309,7 +309,7 @@ impl PyTreeSpec {
                     }
                 }
                 PyTreeKind::NamedTuple | PyTreeKind::StructSequence => {
-                    let obj = obj.downcast::<PyTuple>()?;
+                    let obj = obj.cast::<PyTuple>()?;
                     node.arity = obj.len();
                     node.node_data = Some(obj.get_type().unbind().into_any());
                     for child in obj {
@@ -318,7 +318,7 @@ impl PyTreeSpec {
                 }
                 PyTreeKind::Deque => {
                     let list =
-                        unsafe { obj.clone().downcast_into_unchecked::<PySequence>() }.to_list()?;
+                        unsafe { obj.clone().cast_into_unchecked::<PySequence>() }.to_list()?;
                     node.arity = list.len();
                     for child in list {
                         found_custom |= recurse(child)?;
@@ -335,7 +335,7 @@ impl PyTreeSpec {
                         .bind(obj.py())
                         .clone();
                     let out = flatten_func.call1((obj,))?;
-                    let out = unsafe { out.downcast_into_unchecked::<PySequence>() }.to_tuple()?;
+                    let out = unsafe { out.cast_into_unchecked::<PySequence>() }.to_tuple()?;
                     if out.len() != 2 && out.len() != 3 {
                         return Err(PyValueError::new_err(
                             "Custom flatten function must return a tuple of length 2 or 3.",
@@ -351,7 +351,7 @@ impl PyTreeSpec {
                         let node_entries = out.get_item(2)?;
                         if !node_entries.is_none() {
                             let node_entries =
-                                unsafe { node_entries.downcast_into_unchecked::<PySequence>() }
+                                unsafe { node_entries.cast_into_unchecked::<PySequence>() }
                                     .to_tuple()?;
                             if node_entries.len() != node.arity {
                                 return Err(PyValueError::new_err(
@@ -463,7 +463,7 @@ impl PyTreeSpec {
                     None => {
                         return Err(PyValueError::new_err(format!(
                             "Too few leaves for PyTreeSpec; expected: {}, got: {}.",
-                            Self::num_leaves(&self).unwrap(),
+                            Self::num_leaves(self).unwrap(),
                             num_leaves,
                         )));
                     }
@@ -478,7 +478,7 @@ impl PyTreeSpec {
             Some(Ok(_)) => {
                 return Err(PyValueError::new_err(format!(
                     "Too many leaves for PyTreeSpec; expected: {}.",
-                    Self::num_leaves(&self).unwrap(),
+                    Self::num_leaves(self).unwrap(),
                 )));
             }
             Some(Err(e)) => {

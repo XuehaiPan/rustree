@@ -5,6 +5,7 @@ arity
 bool
 classmethod
 cls
+config
 const
 cpu
 cpython
@@ -17,15 +18,19 @@ defaultdict
 deque
 doctest
 dtype
+dunder
 forwardref
 frozenset
+getattr
 hashable
 init
 instantiation
 issubclass
 iterable
+lr
 mappingentry
 metaclass
+mycontainer
 mytuple
 namedtuple
 namespace

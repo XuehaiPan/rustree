@@ -1,4 +1,4 @@
-# Copyright 2024-2025 Xuehai Pan. All Rights Reserved.
+# Copyright 2024-2026 Xuehai Pan. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 import builtins
 import enum
 from collections.abc import Callable, Collection, Iterable
+from typing import Final
 
 from rustree.typing import (
     FlattenFunc,
@@ -27,11 +28,35 @@ from rustree.typing import (
     UnflattenFunc,
 )
 
-MAX_RECURSION_DEPTH: int
-
 # Set if the type allows subclassing (see CPython's Include/object.h)
-Py_TPFLAGS_BASETYPE: int  # (1UL << 10)
+Py_TPFLAGS_BASETYPE: Final[int]  # (1UL << 10)
 
+class PyTreeKind(enum.IntEnum):
+    CUSTOM = 0  # a custom type
+    LEAF = enum.auto()  # an opaque leaf node
+    NONE = enum.auto()  # None
+    TUPLE = enum.auto()  # a tuple
+    LIST = enum.auto()  # a list
+    DICT = enum.auto()  # a dict
+    NAMEDTUPLE = enum.auto()  # a collections.namedtuple
+    ORDEREDDICT = enum.auto()  # a collections.OrderedDict
+    DEFAULTDICT = enum.auto()  # a collections.defaultdict
+    DEQUE = enum.auto()  # a collections.deque
+    STRUCTSEQUENCE = enum.auto()  # a PyStructSequence
+
+MAX_RECURSION_DEPTH: Final[int]
+
+class PyTreeSpec:
+    num_nodes: int
+    num_leaves: int
+    num_children: int
+    none_is_leaf: bool
+    namespace: str
+    type: builtins.type | None
+    kind: PyTreeKind
+    def unflatten(self, leaves: Iterable[T], /) -> PyTree[T]: ...
+
+# Functions
 def flatten(
     tree: PyTree[T],
     /,
@@ -39,6 +64,8 @@ def flatten(
     none_is_leaf: bool = False,
     namespace: str = '',
 ) -> tuple[list[T], PyTreeSpec]: ...
+
+# Utility functions
 def is_leaf(
     obj: T,
     /,
@@ -55,29 +82,7 @@ def is_structseq_instance(obj: object, /) -> bool: ...
 def is_structseq_class(cls: type, /) -> bool: ...
 def structseq_fields(obj: tuple | type[tuple], /) -> tuple[str, ...]: ...
 
-class PyTreeKind(enum.IntEnum):
-    CUSTOM = 0  # a custom type
-    LEAF = enum.auto()  # an opaque leaf node
-    NONE = enum.auto()  # None
-    TUPLE = enum.auto()  # a tuple
-    LIST = enum.auto()  # a list
-    DICT = enum.auto()  # a dict
-    NAMEDTUPLE = enum.auto()  # a collections.namedtuple
-    ORDEREDDICT = enum.auto()  # a collections.OrderedDict
-    DEFAULTDICT = enum.auto()  # a collections.defaultdict
-    DEQUE = enum.auto()  # a collections.deque
-    STRUCTSEQUENCE = enum.auto()  # a PyStructSequence
-
-class PyTreeSpec:
-    num_nodes: int
-    num_leaves: int
-    num_children: int
-    none_is_leaf: bool
-    namespace: str
-    type: builtins.type | None
-    kind: PyTreeKind
-    def unflatten(self, leaves: Iterable[T], /) -> PyTree[T]: ...
-
+# Registration functions
 def register_node(
     cls: type[Collection[T]],
     /,
@@ -87,7 +92,7 @@ def register_node(
     namespace: str = '',
 ) -> None: ...
 def unregister_node(
-    cls: type[Collection[T]],
+    cls: type,
     /,
     namespace: str = '',
 ) -> None: ...
