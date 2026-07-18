@@ -128,10 +128,10 @@ MetaData: TypeAlias = Optional[Hashable]
 
 
 @runtime_checkable
-class CustomTreeNode(Protocol[T]):
+class CustomTreeNode(Protocol[T]):  # pylint: disable=too-few-public-methods
     """The abstract base class for custom pytree nodes."""
 
-    def tree_flatten(
+    def __tree_flatten__(
         self,
         /,
     ) -> (
@@ -144,7 +144,7 @@ class CustomTreeNode(Protocol[T]):
         """Flatten the custom pytree node into children and metadata."""
 
     @classmethod
-    def tree_unflatten(cls, metadata: MetaData, children: Children[T], /) -> Self:
+    def __tree_unflatten__(cls, metadata: MetaData, children: Children[T], /) -> Self:
         """Unflatten the children and metadata into the custom pytree node."""
 
 
@@ -296,7 +296,7 @@ class StructSequence(tuple[_T_co, ...], metaclass=StructSequenceMeta):
         raise NotImplementedError
 
 
-structseq: TypeAlias = StructSequence  # noqa: PYI042
+structseq: TypeAlias = StructSequence  # noqa: PYI042 # pylint: disable=invalid-name
 
 del StructSequenceMeta
 
@@ -315,7 +315,7 @@ def is_structseq_instance(obj: object, /) -> bool:
 
 
 # Set if the type allows subclassing (see CPython's Include/object.h)
-Py_TPFLAGS_BASETYPE: int = _rs.Py_TPFLAGS_BASETYPE  # (1UL << 10)
+Py_TPFLAGS_BASETYPE: int = _rs.Py_TPFLAGS_BASETYPE  # (1UL << 10) # pylint: disable=invalid-name
 
 
 @_override_with_(_rs.is_structseq_class)

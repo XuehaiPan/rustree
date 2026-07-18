@@ -23,7 +23,13 @@ use std::collections::hash_map::Entry as HashMapEntry;
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 
-#[pyclass(eq, eq_int, module = "rustree", rename_all = "UPPERCASE")]
+#[pyclass(
+    eq,
+    eq_int,
+    from_py_object,
+    module = "rustree",
+    rename_all = "UPPERCASE"
+)]
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum PyTreeKind {
     Custom = 0,

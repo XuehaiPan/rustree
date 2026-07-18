@@ -1,7 +1,7 @@
 # Package ######################################################################
 
 [build-system]
-requires = ["maturin ~= 1.9"]
+requires = ["maturin ~= 1.14"]
 build-backend = "maturin"
 
 [project]
@@ -22,7 +22,6 @@ keywords = [
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Rust",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
@@ -33,15 +32,18 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
-    "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
     "Intended Audience :: Developers",
     "Intended Audience :: Education",
     "Intended Audience :: Science/Research",
     "Topic :: Utilities",
 ]
-dependencies = ["typing-extensions >= 4.5.0"]
+dependencies = [
+    "typing-extensions >= 4.10.0",
+    "typing-extensions >= 4.12.0; python_version >= '3.13'",
+]
 dynamic = ["version"]
 
 [project.urls]
@@ -55,10 +57,10 @@ python-source = "."
 python-packages = ["rustree"]
 module-name = "rustree._rs"
 include = [
-    "/pyproject.toml",
-    "/rustree/**/*.py",
-    "/rustree/**/*.pyi",
-    "/rustree/**/py.typed",
+    "pyproject.toml",
+    "rustree/**/*.py",
+    "rustree/**/*.pyi",
+    "rustree/**/py.typed",
 ]
 bindings = 'pyo3'
 features = ["pyo3/extension-module"]
@@ -69,7 +71,7 @@ strip = true
 
 [tool.mypy]
 python_version = "3.9"
-exclude = ['^tests/.*\.py$']
+exclude = ['^tests/.*\.py$', '^(third|3rd)[_\-]?party/.*$', '^\.?venv/.*$']
 pretty = true
 show_column_numbers = true
 show_error_codes = true
@@ -93,17 +95,18 @@ no_site_packages = true
 [tool.pylint]
 main.py-version = "3.9"
 main.extension-pkg-allow-list = ["rustree._rs"]
-main.ignore-paths = ["^_rs/$", "^tests/$"]
+main.ignore-paths = ['^tests/$', '^(third|3rd)[_\-]?party/$']
 basic.good-names = []
 design.max-args = 7
 format.max-line-length = 120
-"messages control".disable = [
-    "duplicate-code",
+messages-control.disable = [
     "consider-using-from-import",
+    "duplicate-code",
     "unpacking-non-sequence",
     "unsubscriptable-object",
+    "wrong-import-order",
 ]
-"messages control".enable = ["c-extension-no-member"]
+messages-control.enable = ["c-extension-no-member"]
 spelling.spelling-dict = "en_US"
 spelling.spelling-private-dict-file = "docs/source/spelling_wordlist.txt"
 typecheck.generated-members = ["numpy.*", "torch.*"]
@@ -112,6 +115,7 @@ typecheck.generated-members = ["numpy.*", "torch.*"]
 max-line-length = 500
 
 [tool.codespell]
+builtin = "clear,rare,en-GB_to_en-US"
 ignore-words = "docs/source/spelling_wordlist.txt"
 
 [tool.ruff]
@@ -175,6 +179,9 @@ ignore = [
     # TRY003: avoid specifying long messages outside the exception class
     # long messages are necessary for clarity
     "TRY003",
+    # FURB152: literals that are similar to constants in `math` module.
+    # change code semantics
+    "FURB152",
     # RUF022: `__all__` is not ordered according to an "isort-style" sort
     # `__all__` contains comments to group names
     "RUF022",
@@ -207,6 +214,7 @@ typing-modules = ["rustree.typing"]
 [tool.ruff.lint.isort]
 known-first-party = ["rustree"]
 extra-standard-library = ["typing_extensions"]
+known-local-folder = ["tests"]
 lines-after-imports = 2
 
 [tool.ruff.lint.pydocstyle]
@@ -225,4 +233,5 @@ ban-relative-imports = "all"
 
 [tool.pytest.ini_options]
 verbosity_assertions = 3
+testpaths = ["tests"]
 filterwarnings = ["always", "error"]

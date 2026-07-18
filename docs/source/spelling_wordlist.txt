@@ -5,6 +5,7 @@ arity
 bool
 classmethod
 cls
+config
 const
 cpu
 cpython
@@ -15,13 +16,17 @@ dataclasses
 defaultdict
 doctest
 dtype
+dunder
 frozenset
+getattr
 hashable
 init
 issubclass
 iterable
+lr
 mappingentry
 metaclass
+mycontainer
 mytuple
 namedtuple
 namespace

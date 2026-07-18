@@ -17,6 +17,7 @@
 
 import enum
 from collections.abc import Callable, Collection
+from typing import Final
 
 from rustree.typing import (
     FlattenFunc,
@@ -26,8 +27,9 @@ from rustree.typing import (
 )
 
 # Set if the type allows subclassing (see CPython's Include/object.h)
-Py_TPFLAGS_BASETYPE: int  # (1UL << 10)
+Py_TPFLAGS_BASETYPE: Final[int]  # (1UL << 10)
 
+# Utility functions
 def is_leaf(
     obj: T,
     /,
@@ -57,6 +59,7 @@ class PyTreeKind(enum.IntEnum):
     DEQUE = enum.auto()  # a collections.deque
     STRUCTSEQUENCE = enum.auto()  # a PyStructSequence
 
+# Registration functions
 def register_node(
     cls: type[Collection[T]],
     /,
@@ -66,7 +69,7 @@ def register_node(
     namespace: str = '',
 ) -> None: ...
 def unregister_node(
-    cls: type[Collection[T]],
+    cls: type,
     /,
     namespace: str = '',
 ) -> None: ...

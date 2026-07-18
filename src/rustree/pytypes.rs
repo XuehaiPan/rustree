@@ -38,7 +38,7 @@ fn is_namedtuple_class_impl(cls: &Bound<PyType>) -> bool {
         };
         if fields.is_instance_of::<PyTuple>()
             && fields
-                .downcast::<PyTuple>()
+                .cast::<PyTuple>()
                 .unwrap()
                 .iter()
                 .all(|field| field.is_instance_of::<PyString>())
@@ -68,7 +68,7 @@ fn is_namedtuple_class_impl(cls: &Bound<PyType>) -> bool {
 #[pyo3(signature = (cls, /))]
 #[inline]
 pub fn is_namedtuple_class(cls: &Bound<PyAny>) -> PyResult<bool> {
-    Ok(cls.is_instance_of::<PyType>() && is_namedtuple_class_impl(cls.downcast::<PyType>()?))
+    Ok(cls.is_instance_of::<PyType>() && is_namedtuple_class_impl(cls.cast::<PyType>()?))
 }
 
 #[pyfunction]
@@ -84,7 +84,7 @@ pub fn is_namedtuple_instance(obj: &Bound<PyAny>) -> PyResult<bool> {
 pub fn namedtuple_fields<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
     let (cls, err_msg) = if obj.is_instance_of::<PyType>() {
         (
-            obj.downcast::<PyType>()?,
+            obj.cast::<PyType>()?,
             "Expected a collections.namedtuple type",
         )
     } else {
@@ -97,7 +97,7 @@ pub fn namedtuple_fields<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, Py
         let err_msg = format!("{}, got {}.", err_msg, obj.repr()?);
         return Err(PyTypeError::new_err(err_msg));
     }
-    cls.getattr("_fields")?.extract()
+    cls.getattr("_fields")?.extract().map_err(Into::into)
 }
 
 #[pyfunction]
@@ -107,7 +107,7 @@ pub fn is_namedtuple(obj: &Bound<PyAny>) -> PyResult<bool> {
     let cls = if obj.is_instance_of::<PyType>() {
         &obj.get_type()
     } else {
-        obj.downcast::<PyType>()?
+        obj.cast::<PyType>()?
     };
     Ok(is_namedtuple_class_impl(cls))
 }
@@ -146,7 +146,7 @@ fn is_structseq_class_impl(cls: &Bound<PyType>) -> bool {
 #[pyo3(signature = (cls, /))]
 #[inline]
 pub fn is_structseq_class(cls: &Bound<PyAny>) -> PyResult<bool> {
-    Ok(cls.is_instance_of::<PyType>() && is_structseq_class_impl(cls.downcast::<PyType>()?))
+    Ok(cls.is_instance_of::<PyType>() && is_structseq_class_impl(cls.cast::<PyType>()?))
 }
 
 #[pyfunction]
@@ -161,7 +161,7 @@ pub fn is_structseq_instance(obj: &Bound<PyAny>) -> PyResult<bool> {
 #[inline]
 pub fn is_structseq(obj: &Bound<PyAny>) -> PyResult<bool> {
     let cls = if obj.is_instance_of::<PyType>() {
-        obj.downcast::<PyType>()?
+        obj.cast::<PyType>()?
     } else {
         &obj.get_type()
     };
@@ -221,10 +221,7 @@ fn structseq_fields_impl<'py>(cls: &Bound<'py, PyType>) -> PyResult<Bound<'py, P
 #[inline]
 pub fn structseq_fields<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyTuple>> {
     let (cls, err_msg) = if obj.is_instance_of::<PyType>() {
-        (
-            obj.downcast::<PyType>()?,
-            "Expected a PyStructSequence type",
-        )
+        (obj.cast::<PyType>()?, "Expected a PyStructSequence type")
     } else {
         (
             &obj.get_type(),
